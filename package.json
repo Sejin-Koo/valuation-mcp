@@ -1,0 +1,25 @@
+{
+  "name": "valuation-mcp",
+  "version": "1.0.0",
+  "description": "밸류에이션 계산·조회 MCP 서버 — 시장금리(ECOS)·WACC·DCF·피어 통계·베타 회귀·네이버 시장데이터·DART 사업의 내용",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/run-all.ts",
+    "test:offline": "tsx test/run-all.ts --offline"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "adm-zip": "^0.5.16",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^22.10.0",
+    "@vercel/node": "^5.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.2"
+  }
+}

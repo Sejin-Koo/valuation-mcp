@@ -1,0 +1,275 @@
+{
+ "source": "kr-valuation-data compute_beta (krvaluation.procpa.co.kr), 2026-10-21 조회",
+ "cases": [
+  {
+   "code": "005930",
+   "baseDate": "20250930",
+   "period": "Weekly-2Y",
+   "raw": 1.070466,
+   "adjusted": 1.046977,
+   "rSquared": 0.425382,
+   "dataPoints": 104
+  },
+  {
+   "code": "005930",
+   "baseDate": "20250930",
+   "period": "Monthly-5Y",
+   "raw": 1.098296,
+   "adjusted": 1.065531,
+   "rSquared": 0.599009,
+   "dataPoints": 60
+  },
+  {
+   "code": "000660",
+   "baseDate": "20250930",
+   "period": "Weekly-2Y",
+   "raw": 1.823905,
+   "adjusted": 1.54927,
+   "rSquared": 0.427001,
+   "dataPoints": 104
+  },
+  {
+   "code": "000660",
+   "baseDate": "20250930",
+   "period": "Monthly-5Y",
+   "raw": 1.49203,
+   "adjusted": 1.32802,
+   "rSquared": 0.511366,
+   "dataPoints": 60
+  },
+  {
+   "code": "035510",
+   "baseDate": "20250930",
+   "period": "Weekly-2Y",
+   "raw": 1.089058,
+   "adjusted": 1.059372,
+   "rSquared": 0.08838,
+   "dataPoints": 104
+  },
+  {
+   "code": "035510",
+   "baseDate": "20250930",
+   "period": "Monthly-5Y",
+   "raw": 0.925916,
+   "adjusted": 0.950611,
+   "rSquared": 0.14355,
+   "dataPoints": 60
+  },
+  {
+   "code": "286940",
+   "baseDate": "20250930",
+   "period": "Weekly-2Y",
+   "raw": 0.800829,
+   "adjusted": 0.867219,
+   "rSquared": 0.061782,
+   "dataPoints": 104
+  },
+  {
+   "code": "286940",
+   "baseDate": "20250930",
+   "period": "Monthly-5Y",
+   "raw": 0.317314,
+   "adjusted": 0.544876,
+   "rSquared": 0.027077,
+   "dataPoints": 60
+  },
+  {
+   "code": "045510",
+   "baseDate": "20250930",
+   "period": "Weekly-2Y",
+   "raw": 0.224631,
+   "adjusted": 0.483087,
+   "rSquared": 0.010093,
+   "dataPoints": 104
+  },
+  {
+   "code": "045510",
+   "baseDate": "20250930",
+   "period": "Monthly-5Y",
+   "raw": 0.982967,
+   "adjusted": 0.988645,
+   "rSquared": 0.202743,
+   "dataPoints": 60
+  },
+  {
+   "code": "005930",
+   "baseDate": "20260331",
+   "period": "Weekly-2Y",
+   "raw": 1.309557,
+   "adjusted": 1.206371,
+   "rSquared": 0.644604,
+   "dataPoints": 104
+  },
+  {
+   "code": "005930",
+   "baseDate": "20260331",
+   "period": "Monthly-5Y",
+   "raw": 1.259628,
+   "adjusted": 1.173085,
+   "rSquared": 0.751287,
+   "dataPoints": 60
+  },
+  {
+   "code": "000660",
+   "baseDate": "20260331",
+   "period": "Weekly-2Y",
+   "raw": 1.765848,
+   "adjusted": 1.510565,
+   "rSquared": 0.561233,
+   "dataPoints": 104
+  },
+  {
+   "code": "000660",
+   "baseDate": "20260331",
+   "period": "Monthly-5Y",
+   "raw": 1.590607,
+   "adjusted": 1.393738,
+   "rSquared": 0.630762,
+   "dataPoints": 60
+  },
+  {
+   "code": "035510",
+   "baseDate": "20260331",
+   "period": "Weekly-2Y",
+   "raw": 0.759487,
+   "adjusted": 0.839658,
+   "rSquared": 0.066916,
+   "dataPoints": 104
+  },
+  {
+   "code": "035510",
+   "baseDate": "20260331",
+   "period": "Monthly-5Y",
+   "raw": 0.538698,
+   "adjusted": 0.692465,
+   "rSquared": 0.084796,
+   "dataPoints": 60
+  },
+  {
+   "code": "286940",
+   "baseDate": "20260331",
+   "period": "Weekly-2Y",
+   "raw": 0.912802,
+   "adjusted": 0.941868,
+   "rSquared": 0.254517,
+   "dataPoints": 104
+  },
+  {
+   "code": "286940",
+   "baseDate": "20260331",
+   "period": "Monthly-5Y",
+   "raw": 0.336121,
+   "adjusted": 0.557414,
+   "rSquared": 0.050252,
+   "dataPoints": 60
+  },
+  {
+   "code": "045510",
+   "baseDate": "20260331",
+   "period": "Weekly-2Y",
+   "raw": -0.047493,
+   "adjusted": 0.301671,
+   "rSquared": 0.00046,
+   "dataPoints": 104
+  },
+  {
+   "code": "045510",
+   "baseDate": "20260331",
+   "period": "Monthly-5Y",
+   "raw": 0.413327,
+   "adjusted": 0.608885,
+   "rSquared": 0.060043,
+   "dataPoints": 60
+  },
+  {
+   "code": "005930",
+   "baseDate": "20261015",
+   "period": "Weekly-2Y",
+   "raw": 1.229898,
+   "adjusted": 1.153265,
+   "rSquared": 0.701989,
+   "dataPoints": 104
+  },
+  {
+   "code": "005930",
+   "baseDate": "20261015",
+   "period": "Monthly-5Y",
+   "raw": 1.230802,
+   "adjusted": 1.153868,
+   "rSquared": 0.823135,
+   "dataPoints": 60
+  },
+  {
+   "code": "000660",
+   "baseDate": "20261015",
+   "period": "Weekly-2Y",
+   "raw": 1.787446,
+   "adjusted": 1.524964,
+   "rSquared": 0.712174,
+   "dataPoints": 104
+  },
+  {
+   "code": "000660",
+   "baseDate": "20261015",
+   "period": "Monthly-5Y",
+   "raw": 1.799099,
+   "adjusted": 1.532733,
+   "rSquared": 0.766517,
+   "dataPoints": 60
+  },
+  {
+   "code": "035510",
+   "baseDate": "20261015",
+   "period": "Weekly-2Y",
+   "raw": 0.391827,
+   "adjusted": 0.594551,
+   "rSquared": 0.028505,
+   "dataPoints": 104
+  },
+  {
+   "code": "035510",
+   "baseDate": "20261015",
+   "period": "Monthly-5Y",
+   "raw": 0.333092,
+   "adjusted": 0.555395,
+   "rSquared": 0.054482,
+   "dataPoints": 60
+  },
+  {
+   "code": "286940",
+   "baseDate": "20261015",
+   "period": "Weekly-2Y",
+   "raw": 0.404078,
+   "adjusted": 0.602719,
+   "rSquared": 0.091723,
+   "dataPoints": 104
+  },
+  {
+   "code": "286940",
+   "baseDate": "20261015",
+   "period": "Monthly-5Y",
+   "raw": 0.268241,
+   "adjusted": 0.512161,
+   "rSquared": 0.051646,
+   "dataPoints": 60
+  },
+  {
+   "code": "045510",
+   "baseDate": "20261015",
+   "period": "Weekly-2Y",
+   "raw": 0.015891,
+   "adjusted": 0.343927,
+   "rSquared": 6.1e-05,
+   "dataPoints": 104
+  },
+  {
+   "code": "045510",
+   "baseDate": "20261015",
+   "period": "Monthly-5Y",
+   "raw": 0.094062,
+   "adjusted": 0.396041,
+   "rSquared": 0.006056,
+   "dataPoints": 60
+  }
+ ]
+}

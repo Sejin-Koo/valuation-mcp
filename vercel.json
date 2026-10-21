@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/mcp.ts": {
+      "maxDuration": 300,
+      "includeFiles": "data/**"
+    }
+  }
+}
