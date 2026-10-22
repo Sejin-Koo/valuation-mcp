@@ -280,7 +280,16 @@ export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period, hint?:
       const subsets: typeof open[] = [[], ...open.map(e => [e])];
       if (open.length === 2) subsets.push(open);
       const hit = subsets.find(sub => close(dep.value, ppeBase + sub.reduce((a, e) => a + e.f.value, 0)));
-      if (hit) { for (const e of open) decision.set(e.key, hit.includes(e)); if (ppeRou === null && rou) ppeRou = false; }
+      if (hit) {
+        for (const e of open) decision.set(e.key, hit.includes(e));
+        // 현금흐름표 감가상각비 = 유형자산 변동표 그대로인데 이 기간에 종류별 금액이 없으면, 변동표에 사용권자산이
+        // 들어 있는지는 사업보고서 구성으로 판단한다(실측 컴투스 2026 반기 — 사업보고서는 사용권자산을 유형자산 종류로 공시)
+        const rouOpen = open.find(e => e.key === "rou");
+        if (rouOpen && !hit.includes(rouOpen) && ppeRou === null && hint?.ppeRou === true) {
+          decision.set("rou", true); ppeRou = true;
+          notes.push("사용권자산 상각: 이 기간 유형자산 변동표에 종류별 금액이 없어, 사업보고서처럼 변동표(=현금흐름표 감가상각비)에 사용권자산이 들어 있는 것으로 보았습니다.");
+        } else if (ppeRou === null && rou) ppeRou = false;
+      }
       else {
         notes.push(`현금흐름표 감가상각비(${dep.value.toLocaleString("ko-KR")})가 유형자산 변동표 감가상각(${ppe.value.toLocaleString("ko-KR")})에 사용권자산·투자부동산을 어떻게 더해도 맞지 않습니다 — 원문 확인 필요.`);
         for (const e of open) decision.set(e.key, null);
