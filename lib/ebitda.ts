@@ -120,9 +120,13 @@ export async function getEbitdaInputs(input: { stock_code?: string; corp_code?: 
   const scope: Fact["scope"] = hasC ? "C" : "S";
   if (!hasC) warnings.push("연결재무제표가 없어 별도재무제표 값입니다.");
 
+  // 사업보고서를 먼저 계산해 사용권자산·투자부동산 판정을 반기·분기에 넘긴다
+  const annualIdx = needs.findIndex(n => n.report.kind === "annual");
+  const annualDa = annualIdx >= 0 ? computeDa(factLists[annualIdx], scope, periods[annualIdx]!) : null;
   const parts: PartResult[] = needs.map((n, i) => ({
     label: n.label, report: n.report, period: periods[i]!, sign: n.sign,
-    da: computeDa(factLists[i], scope, periods[i]!), flows: computeFlows(factLists[i], scope, periods[i]!),
+    da: i === annualIdx ? annualDa : computeDa(factLists[i], scope, periods[i]!, annualDa?.decisions),
+    flows: computeFlows(factLists[i], scope, periods[i]!),
   }));
   const currency = currencyOf(factLists[0], scope, periods[0]!);
   if (currency && currency !== "KRW") warnings.push(`보고 통화가 ${currency} 입니다 — 원화 시가총액과 섞기 전에 환산하십시오.`);

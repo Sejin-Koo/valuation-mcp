@@ -186,6 +186,8 @@ export interface DaResult {
   components: DaComponent[];
   reportedCombined: { value: number; tag: string } | null;
   rightOfUseIncluded: boolean | null;
+  /** 사용권자산(rou)·투자부동산(ip)을 감가상각비 줄에 포함(true)/따로 가산(false)으로 판정한 결과 — 같은 회사 다른 기간의 판정 근거로 넘긴다 */
+  decisions: Record<string, boolean | null>;
   notes: string[];
 }
 
@@ -212,7 +214,8 @@ function getter(facts: Fact[], scope: Fact["scope"], p: Period, abs: boolean): G
 
 const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1000, 0.003 * Math.max(Math.abs(a), Math.abs(b)));
 
-export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period): DaResult | null {
+/** hint: 같은 회사 다른 기간(보통 사업보고서)에서 판정한 결과. 이 기간만으로 판정할 수 없을 때 쓴다. */
+export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period, hint?: Record<string, boolean | null>): DaResult | null {
   const g = getter(facts, scope, p, true);
   const depCf = g(["AdjustmentsForDepreciationExpense"]);
   const amoCf = g(["AdjustmentsForAmortisationExpense"]);
@@ -234,7 +237,7 @@ export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period): DaRes
   if (!dep && !amo) {
     if (!combined) return null;
     notes.push("감가상각비·상각비가 합계 한 줄로만 공시돼 구성(사용권자산 포함 여부)을 알 수 없습니다.");
-    return { total: combined.value, totalExclRightOfUse: null, components: [{ item: "감가상각비와 상각비(합계)", value: combined.value, tag: combined.tag, treatment: "기준" }], reportedCombined: combined, rightOfUseIncluded: null, notes };
+    return { total: combined.value, totalExclRightOfUse: null, components: [{ item: "감가상각비와 상각비(합계)", value: combined.value, tag: combined.tag, treatment: "기준" }], reportedCombined: combined, rightOfUseIncluded: null, notes, decisions: {} };
   }
 
   const comps: DaComponent[] = [];
@@ -267,25 +270,40 @@ export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period): DaRes
   const decision = new Map<string, boolean | null>();
   for (const e of extras) if (e.ownCfLine) decision.set(e.key, false);
   const open = extras.filter(e => !e.ownCfLine);
+  // ppeRou: 유형자산 변동표 감가상각에 사용권자산이 들어 있는지(true/false/모름) — 반기·분기 판정에 넘긴다
+  let ppeRou: boolean | null = null;
   if (open.length && dep) {
     // 유형자산 변동표가 사용권자산을 한 종류로 포함하면, 그 몫을 빼 순수 유형자산 감가상각을 기준으로 비교
     const ppeBase = ppe ? ppe.value - (ppeRouClass && rou && close(ppeRouClass.value, rou.value) ? ppeRouClass.value : 0) : 0;
-    if (ppe && ppeBase !== ppe.value) notes.push("유형자산 변동표에 사용권자산이 한 종류로 들어 있어 그 몫을 빼고 대조했습니다.");
+    if (ppe && ppeBase !== ppe.value) { ppeRou = true; notes.push("유형자산 변동표에 사용권자산이 한 종류로 들어 있어 그 몫을 빼고 대조했습니다."); }
     if (dep === depCf && ppe) {
       const subsets: typeof open[] = [[], ...open.map(e => [e])];
       if (open.length === 2) subsets.push(open);
       const hit = subsets.find(sub => close(dep.value, ppeBase + sub.reduce((a, e) => a + e.f.value, 0)));
-      if (hit) for (const e of open) decision.set(e.key, hit.includes(e));
+      if (hit) { for (const e of open) decision.set(e.key, hit.includes(e)); if (ppeRou === null && rou) ppeRou = false; }
       else {
         notes.push(`현금흐름표 감가상각비(${dep.value.toLocaleString("ko-KR")})가 유형자산 변동표 감가상각(${ppe.value.toLocaleString("ko-KR")})에 사용권자산·투자부동산을 어떻게 더해도 맞지 않습니다 — 원문 확인 필요.`);
         for (const e of open) decision.set(e.key, null);
       }
     } else if (dep === ppe) {
-      // 유형자산 변동표 값에는 투자부동산이 없고, 사용권자산은 한 종류로 들어 있을 때만 포함
-      for (const e of open) decision.set(e.key, e.key === "rou" && ppeBase !== ppe!.value);
+      // 유형자산 변동표 값에는 투자부동산이 없다. 사용권자산은 한 종류로 들어 있으면 포함 —
+      // 이 기간에 종류별 태그가 없으면 사업보고서에서 변동표에 사용권자산이 들어 있었는지를 따른다
+      for (const e of open) {
+        if (e.key !== "rou") { decision.set(e.key, false); continue; }
+        if (ppeRou) decision.set("rou", true);
+        else if (hint && typeof hint.ppeRou === "boolean") {
+          decision.set("rou", hint.ppeRou);
+          notes.push(`사용권자산 상각: 이 기간 유형자산 변동표에 종류별 금액이 없어, 사업보고서에서 변동표에 사용권자산이 ${hint.ppeRou ? "들어 있던" : "없던"} 구성을 따랐습니다.`);
+        } else decision.set("rou", false);
+      }
     } else {
       for (const e of open) decision.set(e.key, null);
     }
+  }
+  // 이 기간만으로 판정 못 한 항목은 같은 회사 사업보고서의 판정을 따른다(반기·분기 XBRL 에는 유형자산 변동표 합계가 없는 일이 많다)
+  for (const e of open) if ((decision.get(e.key) ?? null) === null && hint && typeof hint[e.key] === "boolean") {
+    decision.set(e.key, hint[e.key] as boolean);
+    notes.push(`${e.item}: 이 기간 자료만으로는 포함 여부를 판정할 수 없어 사업보고서의 판정(${hint[e.key] ? "감가상각비에 포함" : "따로 가산"})을 따랐습니다.`);
   }
   for (const e of extras) {
     const d = decision.get(e.key) ?? null;
@@ -297,7 +315,7 @@ export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period): DaRes
     if (dep === depCf) comps.push({ item: `${c.label}(현금흐름표 회사 고유 행)`, value: c.value, tag: c.tag, treatment: "별도 가산" });
     else notes.push(`현금흐름표에 회사 고유 행 "${c.label}"(${c.value.toLocaleString("ko-KR")})이 있으나 감가상각비 기준이 현금흐름표가 아니어서 더하지 않았습니다.`);
   }
-  if (extras.some(e => e.key === "rou" && !e.ownCfLine && decision.get("rou") === false)) notes.push("현금흐름표에서 사용권자산 상각 행을 찾지 못해 사용권자산 변동표 금액을 따로 더했습니다 — 현금흐름표 주석에서 다른 행에 들어 있는지 확인을 권합니다.");
+  if (dep === depCf && extras.some(e => e.key === "rou" && !e.ownCfLine && decision.get("rou") === false)) notes.push("현금흐름표에서 사용권자산 상각 행을 찾지 못해 사용권자산 변동표 금액을 따로 더했습니다 — 현금흐름표 주석에서 다른 행에 들어 있는지 확인을 권합니다.");
   if (comps.some(c => c.treatment === "판정 불가(가산 안 함)")) notes.push("사용권자산·투자부동산 상각이 감가상각비에 포함됐는지 판정하지 못한 항목은 더하지 않았습니다. 구성항목 금액을 보고 판단하십시오.");
 
   const added = comps.filter(c => c.treatment === "기준" || c.treatment === "별도 가산").reduce((a, c) => a + c.value, 0);
@@ -309,7 +327,7 @@ export function computeDa(facts: Fact[], scope: Fact["scope"], p: Period): DaRes
     const why = rouComp && close(diff, rouComp.value) ? " — 차이는 사용권자산 상각과 같습니다(회사가 공시한 합계는 사용권자산 상각을 뺀 금액)." : "";
     notes.push(`회사가 공시한 감가상각비·상각비 합계(${combined.value.toLocaleString("ko-KR")}, ${combined.tag})와 구성 합계가 ${diff.toLocaleString("ko-KR")} 다릅니다${why}`);
   }
-  return { total: added, totalExclRightOfUse: exclRou, components: comps, reportedCombined: combined, rightOfUseIncluded: rouIn, notes };
+  return { total: added, totalExclRightOfUse: exclRou, components: comps, reportedCombined: combined, rightOfUseIncluded: rouIn, notes, decisions: { ...Object.fromEntries(extras.map(e => [e.key, decision.get(e.key) ?? null])), ppeRou } };
 }
 
 export interface Flows { revenue: { value: number; tag: string } | null; operatingIncome: { value: number; tag: string } | null; netIncomeParent: { value: number; tag: string } | null }
