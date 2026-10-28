@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 
 const offline = process.argv.includes("--offline");
-const suites = ["test/dcf-equivalence.ts", "test/xbrl-da.ts", ...(offline ? [] : ["test/beta-vs-reference.ts", "test/e2e.ts"])];
+const suites = ["test/dcf-equivalence.ts", "test/dcf-stub.ts", "test/xbrl-da.ts", ...(offline ? [] : ["test/beta-vs-reference.ts", "test/e2e.ts"])];
 let failed = 0;
 for (const s of suites) {
   console.log(`\n▶ ${s}`);

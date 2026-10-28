@@ -29,6 +29,10 @@ export interface DcfInput {
   exit_multiple?: number;
   terminal_metric?: number;
   mid_year?: boolean;
+  /** 평가기준일부터 첫해 회계연도 말까지의 연수(0 < x ≤ 1). 주면 할인 시점을 평가기준일에 맞춘다. 없으면 기존 관행(1년차 말) */
+  stub_fraction?: number;
+  /** true면 fcf[0]이 첫해 연간 값이라고 보고 stub_fraction 만큼만 쓴다 */
+  stub_prorate?: boolean;
   net_debt?: number;
   non_controlling_interest?: number;
   non_operating_assets?: number;
@@ -90,11 +94,12 @@ export function buildWacc(a: WaccInput): { wacc: number; detail: WaccDetail } {
 
 type Tv = { kind: "gordon"; g: number } | { kind: "multiple"; multiple: number; metric: number };
 
-function valueOnce(fcf: number[], wacc: number, tv: Tv, midYear: boolean) {
+function valueOnce(fcf: number[], wacc: number, tv: Tv, midYear: boolean, stub: number | null = null) {
   const n = fcf.length;
   let pvSum = 0; const rows: { t: number; df: number; pv: number }[] = [];
   fcf.forEach((v, i) => {
-    const t = midYear ? i + 0.5 : i + 1;
+    // stub: 평가기준일~첫해 말 기간(연). 첫해는 그 기간의 끝(또는 가운데), 이후 해는 stub + i 년 말(또는 가운데)
+    const t = stub === null ? (midYear ? i + 0.5 : i + 1) : (i === 0 ? (midYear ? stub / 2 : stub) : (midYear ? stub + i - 0.5 : stub + i));
     const df = 1 / Math.pow(1 + wacc, t);
     pvSum += v * df; rows.push({ t, df, pv: v * df });
   });
@@ -105,7 +110,7 @@ function valueOnce(fcf: number[], wacc: number, tv: Tv, midYear: boolean) {
   } else {
     tvValue = tv.multiple * tv.metric;
   }
-  const pvTv = tvValue / Math.pow(1 + wacc, n);
+  const pvTv = tvValue / Math.pow(1 + wacc, stub === null ? n : stub + n - 1);
   return { rows, pvSum, tvValue, pvTv, ev: pvSum + pvTv };
 }
 
@@ -118,7 +123,13 @@ export function calculateDcf(a: DcfInput) {
   else if (isNum(a.exit_multiple) && isNum(a.terminal_metric)) tv = { kind: "multiple", multiple: a.exit_multiple, metric: a.terminal_metric };
   else throw new Error("terminal_growth_pct 또는 exit_multiple + terminal_metric이 필요합니다");
   const mid = !!a.mid_year;
-  const base = valueOnce(fcf, wacc, tv, mid);
+  let stub: number | null = null;
+  if (a.stub_fraction !== undefined && a.stub_fraction !== null) {
+    if (!isNum(a.stub_fraction) || a.stub_fraction <= 0 || a.stub_fraction > 1) throw new Error("stub_fraction은 0보다 크고 1 이하여야 합니다");
+    stub = a.stub_fraction;
+    if (a.stub_prorate) fcf[0] = fcf[0] * stub;
+  }
+  const base = valueOnce(fcf, wacc, tv, mid, stub);
 
   const nd = isNum(a.net_debt) ? a.net_debt : null;
   const nci = isNum(a.non_controlling_interest) ? a.non_controlling_interest : 0;
@@ -154,7 +165,7 @@ export function calculateDcf(a: DcfInput) {
     seconds.forEach(x => {
       const col = tv.kind === "gordon" ? `g ${r2(x * 100)}%` : `${r2(x)}배`;
       try {
-        const v = valueOnce(fcf, w, mk(x), mid);
+        const v = valueOnce(fcf, w, mk(x), mid, stub);
         const val = outKey === "주당가치" ? perShareOf(v.ev) : outKey === "주주가치" ? equityOf(v.ev) : v.ev;
         row[col] = r2(val as number);
       } catch { row[col] = null; }
@@ -169,13 +180,17 @@ export function calculateDcf(a: DcfInput) {
   if (fcf.some(v => v < 0)) warnings.push("음(-)의 FCF가 있는 연도가 있습니다.");
   if (fcf[fcf.length - 1] < 0 && tv.kind === "gordon") warnings.push("마지막 해 FCF가 음수라 영구성장 잔존가치가 음수입니다. 정상화된 FCF를 쓰는지 확인이 필요합니다.");
   if (nd === null) warnings.push("net_debt가 없어 주주가치·주당가치는 계산하지 않았습니다.");
+  if (stub !== null && stub < 1 && !a.stub_prorate) warnings.push(`첫해 FCF는 평가기준일부터 첫해 말까지(${r4(stub)}년) 기간의 현금흐름으로 보고 할인했습니다. 연간 값을 넣었다면 stub_prorate=true로 다시 계산하십시오.`);
+  if (stub !== null && stub < 1 && fcf.length < 2 && tv.kind === "gordon") warnings.push("추정이 첫해 잔여기간 한 개뿐이라 잔존가치가 부분 기간 FCF로 계산됐습니다. 1년 이상 추정하십시오.");
 
   const out = {
     단위: a.unit || "(미지정)",
     가정: {
       FCF산출: how, 추정연수: fcf.length, 할인율: detail as WaccDetail & Record<string, unknown>,
       잔존가치: tv.kind === "gordon" ? { 방식: "영구성장(고든)", 영구성장률_pct: r2(tv.g * 100) } : { 방식: "배수", 배수: tv.multiple, 지표값: tv.metric },
-      할인관행: mid ? "연중 현금흐름(t-0.5), 잔존가치는 N년 말" : "연말 현금흐름(t), 잔존가치는 N년 말",
+      할인관행: stub === null
+        ? (mid ? "연중 현금흐름(t-0.5), 잔존가치는 N년 말" : "연말 현금흐름(t), 잔존가치는 N년 말")
+        : `평가기준일 기준 — 첫해 잔여기간 ${r4(stub)}년${a.stub_prorate ? "(첫해 FCF를 그 비율만큼 반영)" : ""}, ${mid ? "각 기간 가운데" : "각 기간 말"} 할인, 잔존가치는 ${r4(stub + fcf.length - 1)}년 시점`,
       순차입금: nd, 비지배지분: nci, 비영업자산: noa, 주식수: isNum(a.shares_outstanding) ? a.shares_outstanding : null,
     },
     연도별: table,
