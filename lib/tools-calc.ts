@@ -8,7 +8,7 @@ import { z } from "zod";
 import { num, bool, jsonArray, jsonObject, yyyymmdd, text, fail, defineTool } from "./common.js";
 import { RATE_KEYS, RATE_ITEMS, getRatesAsOf, type RateKey } from "./ecos.js";
 import { calculateWacc, resolveWaccInputs } from "./wacc.js";
-import { calculateDcf, r2 } from "./dcf.js";
+import { type DcfInput, calculateDcf, r2 } from "./dcf.js";
 import { peerStatistics, type PeerRow, type MetricKey } from "./peer-stats.js";
 
 const TENORS = ["1y", "2y", "3y", "5y", "10y", "20y", "30y", "50y"] as const;
@@ -61,13 +61,37 @@ const DcfSchema = z.object({
         unit: z.string().optional(), first_year: z.coerce.number().int().optional(),
         fcf: jsonArray(num()).optional(), base_fcf: num().optional(), growth_rates_pct: jsonArray(num()).optional(),
         terminal_growth_pct: num().optional(), exit_multiple: num().optional(), terminal_metric: num().optional(),
-        mid_year: bool().optional(), net_debt: num().optional(), non_controlling_interest: num().optional(),
+        mid_year: bool().optional(),
+        stub_fraction: num().optional().describe("평가기준일부터 첫해 회계연도 말까지의 연수(0~1). 비우면 valuation_date·first_year·fiscal_year_end 로 자동 계산"),
+        stub_prorate: bool().optional().describe("true면 fcf[0](또는 첫해 값)을 연간 값으로 보고 잔여기간 비율만큼만 반영"),
+        fiscal_year_end: z.string().regex(/^\d{4}$/).optional().describe("회계연도 말 MMDD(기본 1231)"),
+        net_debt: num().optional(), non_controlling_interest: num().optional(),
         non_operating_assets: num().optional(), shares_outstanding: num().optional(),
         sensitivity: jsonObject(z.object({
           wacc_step_pct: num().optional(), wacc_steps: z.coerce.number().int().optional(),
           growth_step_pct: num().optional(), multiple_step: num().optional(), second_steps: z.coerce.number().int().optional(),
         })).optional(),
       });
+
+// 평가기준일이 첫해 회계연도 중간이면 첫해 잔여기간(연)을 계산한다. stub_fraction 을 직접 주면 그대로 둔다
+export function stubFromDates(vd?: string, firstYear?: number, fye?: string, given?: number): { fraction?: number; note?: string } {
+  if (given !== undefined && given !== null) return {};
+  if (!vd) return {};
+  const mmdd = fye || "1231";
+  const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d);
+  const v = day(+vd.slice(0, 4), +vd.slice(4, 6), +vd.slice(6, 8));
+  const fyEnd = (y: number) => day(y, +mmdd.slice(0, 2), +mmdd.slice(2, 4));
+  if (!Number.isInteger(firstYear)) {
+    const y = +vd.slice(0, 4);
+    if (v !== fyEnd(y) && v !== fyEnd(y - 1)) return { note: `first_year가 없어 할인 시점을 평가기준일(${vd})에 맞추지 않았습니다(1년차 말 관행). 연중 평가라면 first_year를 주십시오.` };
+    return {};
+  }
+  const end = fyEnd(firstYear as number), prevEnd = fyEnd((firstYear as number) - 1);
+  if (v >= end) throw new Error(`평가기준일(${vd})이 첫 추정연도(${firstYear}) 회계연도 말 이후입니다. first_year를 평가기준일 다음 회계연도로 주십시오.`);
+  if (v <= prevEnd) return v < prevEnd ? { note: `평가기준일(${vd})이 첫 추정연도 직전 회계연도 말보다 앞서 1년차 말 관행으로 할인했습니다.` } : {};
+  const frac = Math.round(((end - v) / 86400000 / 365) * 10000) / 10000;
+  return { fraction: Math.min(1, frac), note: `평가기준일 ${vd} → ${firstYear} 회계연도 말까지 ${Math.min(1, frac)}년(일수/365)으로 첫해를 할인` };
+}
 
 export function registerCalcTools(server: McpServer): void {
   // ── 1. 금리 ──────────────────────────────────────────────
@@ -169,6 +193,7 @@ dart-mcp 의 dcf_calculate 와 같은 계산이며, 이 서버에서는 risk_fre
 비율은 퍼센트 숫자(9.5 = 9.5%). FCF는 fcf(연도별 값 배열) 또는 base_fcf + growth_rates_pct 중 하나로 준다.
 할인율은 wacc_pct를 직접 주거나, risk_free_pct·mrp_pct·beta(또는 unlevered_beta)·cost_of_debt_pct·tax_rate_pct·debt_to_equity(또는 debt_weight_pct)로 계산하게 한다.
 잔존가치는 terminal_growth_pct(영구성장) 또는 exit_multiple + terminal_metric으로 준다.
+할인 시점: valuation_date 와 first_year(첫 추정 회계연도)를 함께 주면 평가기준일부터 첫해 말까지의 잔여기간(stub)으로 첫해를 할인하고 이후 해와 잔존가치도 그만큼 당겨 할인한다(연중 평가에서 1년차 말 관행을 쓰면 과다 할인). 이때 fcf[0]은 잔여기간의 현금흐름이어야 하며, 연간 추정치를 넣었다면 stub_prorate=true 로 잔여기간 비율만 반영한다. 두 값이 없으면 1년차 말(또는 mid_year) 관행.
 결과에는 쓰인 가정이 모두 들어 있으므로, 답변에 가정을 밝히고 다른 가정이 필요하면 다시 계산하겠다고 안내한다.`,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -176,7 +201,10 @@ dart-mcp 의 dcf_calculate 와 같은 계산이며, 이 서버에서는 risk_fre
     async (args: z.infer<typeof DcfSchema>) => {
       try {
         const { inputs, provenance, warnings } = await resolveWaccInputs(args);
-        const r = calculateDcf(inputs);
+        const st = stubFromDates(args.valuation_date, args.first_year, args.fiscal_year_end, args.stub_fraction);
+        if (st.fraction !== undefined) (inputs as DcfInput).stub_fraction = st.fraction;
+        if (st.note) { provenance.stub_fraction = st.note; warnings.push(st.note); }
+        const r = calculateDcf(inputs as DcfInput);
         const extra = Object.keys(provenance).some(k => provenance[k].startsWith("ECOS"))
           ? ["", "자동조회한 입력:", ...Object.entries(provenance).filter(([, v]) => v.startsWith("ECOS")).map(([k, v]) => `- ${k}: ${v}`), ...warnings.map(w => `- ${w}`)]
           : [];
