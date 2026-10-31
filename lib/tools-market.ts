@@ -4,7 +4,8 @@ import { z } from "zod";
 import { num, jsonArray, yyyymmdd, text, fail, defineTool } from "./common.js";
 import { computeBeta, BETA_PERIODS, type BetaPeriod } from "./beta.js";
 import { getMarketSnapshot } from "./naver.js";
-import { resolveCorp, findAnnualReport, downloadDocument, extractBusinessSection } from "./dart.js";
+import { resolveCorp, findAnnualReport, downloadDocumentWithInfo, extractBusinessSection } from "./dart.js";
+import { cacheLine } from "./doc-cache.js";
 
 const code6 = () => z.string().regex(/^[0-9A-Z]{6}$/, "종목코드 6자리");
 
@@ -84,7 +85,7 @@ export function registerMarketTools(server: McpServer): void {
     title: "사업보고서 'II. 사업의 내용' 전체 추출",
     description: `DART 사업보고서 원본에서 "II. 사업의 내용" 장을 통째로(사업의 개요·주요 제품 및 서비스·원재료 및 생산설비·매출 및 수주상황·위험관리·주요계약 및 연구개발·기타 참고사항) 마크다운으로 돌려줍니다. 표는 마크다운 표로 변환합니다.
 - 장 경계는 DART 구조코드로 자르므로 하위 항목이 빠지지 않습니다. subsections 로 일부만 받을 수 있습니다.
-- 매 호출마다 DART 원본을 새로 내려받아 30~60초가 걸립니다(대형 보고서는 더 걸릴 수 있음, 정상).
+- 받은 원본은 서버에 접수번호 단위로 24시간 보관됩니다. 그 보고서의 첫 호출만 DART 원본을 받느라 30~60초가 걸리고(대형 보고서는 더 걸릴 수 있음, 정상), 같은 보고서를 다시 부르면(다른 하위 항목·다음 쪽) 보관본으로 빠르게 응답합니다. 응답의 "원문:" 줄에 보관본 사용 여부가 표시됩니다.
 - 길면 max_chars 에서 잘리고 응답 끝에 이어 받을 part 번호를 알려 줍니다. 잘렸는데 "없다"고 결론짓지 마십시오.
 - 재무제표 주석(차입금·전환사채 잔액 등)은 이 장에 없습니다.`,
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -97,7 +98,7 @@ export function registerMarketTools(server: McpServer): void {
         const rep = await findAnnualReport(corp.corp_code, a.year);
         rcept = rep.rcept_no; reportName = rep.report_nm; corpName = rep.corp_name; filed = rep.rcept_dt;
       }
-      const files = await downloadDocument(rcept);
+      const { files, cache, ms } = await downloadDocumentWithInfo(rcept);
       const sec = extractBusinessSection(files);
       let subs = sec.subsections;
       if (a.subsections?.length) {
@@ -113,6 +114,7 @@ export function registerMarketTools(server: McpServer): void {
       const head = [
         `${corpName ?? ""} ${reportName} (접수번호 ${rcept}${filed ? `, 접수일 ${filed}` : ""}) — II. 사업의 내용`,
         `추출: ${sec.method}, 전체 ${full.length.toLocaleString("ko-KR")}자${parts > 1 ? `, ${parts}쪽 중 ${part}쪽` : ""}`,
+        cacheLine(cache, ms),
         `하위 항목: ${sec.subsections.map(s => `${s.index}. ${s.title}(${s.chars.toLocaleString("ko-KR")}자)`).join(" / ")}`,
         "", "---", "",
       ];

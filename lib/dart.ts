@@ -12,6 +12,7 @@
  *
  * 원문은 요청 처리 동안만 메모리에 있고 저장하지 않는다.
  */
+import { getZipWithCache, type CacheInfo } from "./doc-cache.js";
 import AdmZip from "adm-zip";
 import { readFileSync } from "node:fs";
 
@@ -78,8 +79,21 @@ export async function findAnnualReport(corp_code: string, year: string): Promise
 /** maxDuration 300초 안에서 한 번에 예산을 몰아준다 — 짧게 여러 번보다 길게 한 번이 낫다(dart-mcp 실측). */
 const DOWNLOAD_TIMEOUT_MS = 240_000;
 
-export async function downloadDocument(rcept_no: string): Promise<{ name: string; xml: string; encoding: string }[]> {
+export type DocFile = { name: string; xml: string; encoding: string };
+
+/** 원문을 24시간 보관소(lib/doc-cache.ts)를 거쳐 받는다. cache 에 보관본 사용 여부가 담긴다. */
+export async function downloadDocumentWithInfo(rcept_no: string): Promise<{ files: DocFile[]; cache: CacheInfo; ms: number }> {
   if (!/^\d{14}$/.test(rcept_no)) throw new DartError(`rcept_no 는 14자리입니다: ${rcept_no}`);
+  const t0 = Date.now();
+  const { buf, cache } = await getZipWithCache(rcept_no, () => downloadZip(rcept_no));
+  return { files: new AdmZip(buf).getEntries().map(e => ({ name: e.entryName, ...decodeXml(e.getData()) })), cache, ms: Date.now() - t0 };
+}
+
+export async function downloadDocument(rcept_no: string): Promise<DocFile[]> {
+  return (await downloadDocumentWithInfo(rcept_no)).files;
+}
+
+async function downloadZip(rcept_no: string): Promise<Buffer> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DOWNLOAD_TIMEOUT_MS);
   let buf: Buffer;
@@ -96,7 +110,7 @@ export async function downloadDocument(rcept_no: string): Promise<{ name: string
   if (buf.length < 100 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
     throw new DartError(`DART 원본이 zip 이 아닙니다: ${buf.toString("utf8", 0, Math.min(buf.length, 200))}`, "NOT_ZIP");
   }
-  return new AdmZip(buf).getEntries().map(e => ({ name: e.entryName, ...decodeXml(e.getData()) }));
+  return buf;
 }
 
 function decodeXml(buf: Buffer): { xml: string; encoding: string } {

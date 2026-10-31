@@ -9,9 +9,12 @@
     "test": "tsx test/run-all.ts",
     "test:offline": "tsx test/run-all.ts --offline"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vercel/blob": "^2.8.2",
     "adm-zip": "^0.5.16",
     "zod": "^4.4.3"
   },
