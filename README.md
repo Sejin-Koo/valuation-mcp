@@ -12,7 +12,7 @@
 | `dcf_calculate` | DCF 기업가치·주주가치·주당가치·민감도. dart-mcp 의 같은 이름 도구와 출력이 같고, 금리 자동조회가 추가됨 | 계산 / ECOS |
 | `beta_regression` | 주간(1·2·3년)·월간(3·5년) 베타, 결정계수·표준오차, KOSPI/KOSDAQ 선택 | 네이버 금융 수정주가 |
 | `naver_market_snapshot` | 당일 시세·PER·PBR·컨센서스·네이버 동종업종 | 네이버 금융 |
-| `dart_business_section` | 사업보고서 "II. 사업의 내용" 장 전체를 마크다운으로(표 포함), 하위 항목 선택·쪽 나눠 받기. 원본은 Vercel Blob 비공개 저장소(`valuation-doc-cache`)에 접수번호 단위로 24시간 보관(`lib/doc-cache.ts`, 끄려면 `DOC_CACHE_DISABLED=1`) | OpenDART 원본 |
+| `dart_business_section` | 사업보고서 "II. 사업의 내용" 장 전체를 마크다운으로(표 포함), 하위 항목 선택·쪽 나눠 받기. 원본은 Vercel Blob 비공개 저장소(`valuation-doc-cache`)에 접수번호 단위로 24시간 보관(`lib/doc-cache.ts`, 끄려면 `DOC_CACHE_DISABLED=1`). 만료분은 `api/doc-cache-cleanup.ts`가 매일 03:10 KST에 지운다(Vercel Cron, `CRON_SECRET` 인증) | OpenDART 원본 |
 | `dart_ebitda_inputs` | 감가상각비(유형·사용권자산·무형·투자부동산)와 영업이익·매출·지배주주순이익을 연간 또는 최근 12개월(TTM)로. 결과의 `peerRow`를 `peer_statistics`에 넣으면 EV/EBITDA 계산. 감가상각 태그가 없는 소형사는 원문 주석 표 발췌 | OpenDART XBRL 원본·원문 |
 
 피어 모집단(`peergroup_get_population`)과 이자부부채가 포함된 분기말 밸류에이션 데이터(`valuation_get_data`)는 이 서버에 없습니다. 외부 서버 [kr-valuation-data](https://github.com/procpalee/DCF-Peergroup-Search)를 그대로 쓰고, 그 결과를 `peer_statistics` 에 넘기는 구성입니다. 이 서버의 일부 도구는 그 서버와 결과를 대조하는 용도로도 씁니다(아래 검증).

@@ -3,6 +3,15 @@
     "api/mcp.ts": {
       "maxDuration": 300,
       "includeFiles": "data/**"
+    },
+    "api/doc-cache-cleanup.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/doc-cache-cleanup",
+      "schedule": "10 18 * * *"
+    }
+  ]
 }

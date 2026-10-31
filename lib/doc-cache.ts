@@ -5,9 +5,8 @@
 // 접수번호 단위로 24시간 보관한다.
 // - 같은 접수번호의 원문은 바뀌지 않는다(새 보고서·정정공시는 새 접수번호) → 보관본이 낡은 답을 내지 않는다.
 // - 보관소는 보조 장치다. 토큰이 없거나 Blob 호출이 실패해도 종전처럼 직접 받는다.
-// - 만료는 읽을 때 판정한다. 만료분 삭제는 새 원문을 저장할 때 함께 한다(인스턴스마다 6시간에 한 번).
-//   dart-mcp 는 Vercel Cron 으로 지우지만, 이 서버는 정리용 비밀값 없이 돌도록 저장 시점에 묶었다.
-//   새 저장이 없으면 정리도 없지만, 그때는 보관소도 더 커지지 않는다.
+// - 만료는 읽을 때 판정하고, api/doc-cache-cleanup.ts 가 매일 만료분을 지운다(dart-mcp 와 같은 방식,
+//   Vercel Cron + CRON_SECRET).
 import { get, put, del, list } from "@vercel/blob";
 
 export const CACHE_PREFIX = "dart-doc-cache/";
@@ -68,7 +67,6 @@ export async function getZipWithCache(rcept_no: string, download: () => Promise<
   if ("buf" in hit) return { buf: hit.buf, cache: { status: "hit", uploadedAt: hit.uploadedAt.toISOString() } };
   const buf = await download();
   const err = await write(rcept_no, buf);
-  if (!err) await maybePurge();
   const reason = ["miss" in hit ? hit.miss : hit.error, err].filter(Boolean).join(" / ") || undefined;
   return { buf, cache: { status: err ? "error" : "miss", reason } };
 }
@@ -83,16 +81,7 @@ export function cacheLine(c: CacheInfo, ms?: number): string {
   return `원문: ${bits.join(" · ")}`;
 }
 
-const PURGE_EVERY_MS = 6 * 60 * 60 * 1000;
-let lastPurge = 0;
-/** 새 원문을 저장한 직후, 이 인스턴스에서 6시간 안에 정리한 적이 없으면 만료분을 지운다. 실패해도 무시한다. */
-async function maybePurge(now = Date.now()) {
-  if (now - lastPurge < PURGE_EVERY_MS) return;
-  lastPurge = now;
-  try { await withTimeout(() => purgeExpired(now)); } catch { /* 정리는 다음 기회에 */ }
-}
-
-/** 24시간이 지난 보관본을 지운다. */
+/** 24시간이 지난 보관본을 지운다(정리 작업용). */
 export async function purgeExpired(now = Date.now()): Promise<{ scanned: number; deleted: number }> {
   let cursor: string | undefined; let scanned = 0; const expired: string[] = [];
   do {
