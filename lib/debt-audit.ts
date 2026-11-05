@@ -29,7 +29,7 @@ function unitBefore(text: string): number | null {
   return u === "억원" ? 1e8 : u === "백만원" ? 1e6 : u === "천원" ? 1e3 : u === "원" ? 1 : NaN;
 }
 
-interface NoteTable { start: number; rows: string[][]; headRows: number; unit: number | null; context: string; headText: string }
+export interface NoteTable { start: number; rows: string[][]; headRows: number; unit: number | null; context: string; headText: string }
 
 export function noteTables(xml: string, from: number): NoteTable[] {
   const out: NoteTable[] = [];
@@ -49,7 +49,7 @@ export function noteTables(xml: string, from: number): NoteTable[] {
 
 /** 전기 표(당기 표 다음에 따로 나오는 '전기말' 표)인지: 바로 앞 제목에 전기만 있고 당기가 없거나, 머리에 전기만 있음.
  * '당기말 및 전기말 현재 …' 같은 설명문은 당기 표다(실측: 오버데어코리아 2025). */
-function priorYearTable(t: NoteTable): boolean {
+export function priorYearTable(t: NoteTable): boolean {
   // '당기말 및 전기말 현재 …' 같은 두 해 설명은 빼고, 바로 앞 글에서 마지막으로 나온 해 표기가 전기면 전기 표
   const c = norm(t.context.slice(-120)).replace(/당(기|분기|반기)말?(및|과|와|,|ㆍ|·)전(기|분기|반기)말?/g, "");
   const lastCur = Math.max(c.lastIndexOf("당기"), c.lastIndexOf("당분기"), c.lastIndexOf("당반기"));
@@ -67,7 +67,7 @@ function currentCol(t: NoteTable): number {
   return -1;
 }
 /** 행의 이름 칸들: 첫 숫자 칸 앞의 글 칸(병합된 묶음 이름 + 세부 이름). 뒤쪽(세부)부터 */
-function labels(row: string[]): { label: string; idx: number }[] {
+export function labels(row: string[]): { label: string; idx: number }[] {
   const out: { label: string; idx: number }[] = [];
   for (let c = 0; c < row.length; c++) {
     const v = (row[c] ?? "").trim();

@@ -55,7 +55,7 @@ const norm = (s: string) => s.replace(/\s/g, "");
 export function cleanName(s: string): string {
   let t = s.replace(/[ 　]/g, " ").trim();
   for (let i = 0; i < 3; i++) {
-    t = t.replace(/^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+|[IVXivxl]+(?=\s*[.．])|\d{1,2}|[가나다라마바사아자차카타파하]|[A-Za-z])\s*[.．)]\s*/, "")
+    t = t.replace(/^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫIVX]+(?=\s*[.．])|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+|[IVXivxl]+(?=\s*[.．])|\d{1,2}|[가나다라마바사아자차카타파하]|[A-Za-z])\s*[.．)]\s*/, "")
       .replace(/^\(\s*(\d{1,2}|[가나다라마바사아자차카타파하]|[A-Za-z])\s*\)\s*/, "")
       .replace(/^[①-⑳㉠-㉭㈀-㈍]\s*/, "")
       .trim();
@@ -70,7 +70,8 @@ export const keyName = (s: string) => s.replace(/\s/g, "").replace(/\((주석?|�
 
 /** "1,234" "(1,234)" "△1,234" "-1,234" "-" → 숫자. 숫자가 아니면 null */
 export function parseAmount(s: string): number | null {
-  let t = s.replace(/\s/g, "");
+  // 합계 밑줄을 글자로 적은 '=====' '_____' 는 뗀다(실측: 이마트 2025 연결 손익·재무상태표)
+  let t = s.replace(/\s/g, "").replace(/^[=_]+|[=_]+$/g, "");
   if (!t) return null;
   if (/^[-–—]+$/.test(t)) return 0;
   let neg = false;
@@ -104,59 +105,72 @@ const SECTION: [RegExp, string][] = [
 // 합계 행은 구역을 닫는 것이므로 별도 표시로 바꾼다.
 const CLOSE = /^(부채총계|부채합계|부채계|유동부채합계|유동부채총계|비유동부채합계|고정부채합계)$/;
 
-/** 재무상태표 표 찾기: 행 이름에 부채총계(합계)와 자본(총계)이 함께 있는 첫 표. 앞쪽 제목·단위 표의 글도 함께 본다. */
-export function extractBalanceSheet(xml: string): HtmlBs | null {
-  const tables = Array.from(xml.matchAll(/<TABLE\b[^>]*>([\s\S]*?)<\/TABLE>/gi), m => ({ html: m[0], start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+/** 재무제표 표 한 장: 행마다 당기·전기 금액(원 단위로 환산 전 원값과 환산값) */
+export interface StmtRow { name: string; key: string; cur: number | null; prev: number | null; raw: string }
+export interface Statement { rows: StmtRow[]; unit: number; unitLabel: string; title: string; start: number; amountCols: number; warnings: string[] }
+
+/** 조건에 맞는 첫 재무제표 표를 읽는다. pick(names) 는 행 이름(번호·주석 표기 뗀 것) 목록을 받아 이 표가 맞는지 판정 */
+export function extractStatement(xml: string, pick: (keys: string[]) => boolean, from = 0): Statement | null {
+  const tables = Array.from(xml.matchAll(/<TABLE\b[^>]*>([\s\S]*?)<\/TABLE>/gi), m => ({ html: m[0], start: m.index ?? 0 })).filter(t => t.start >= from);
   for (let i = 0; i < tables.length; i++) {
     const { rows, headRows } = tableGrid(tables[i].html);
-    const names = rows.map(r => norm(cleanName(r[0] ?? "")));
-    const liabTot = names.findIndex(n => /^(부채총계|부채합계)$/.test(n));
-    const eqIdx = names.findIndex(n => /^(자본총계|자본합계|부채와자본총계|자본과부채총계|부채및자본총계)$/.test(n));
-    if (liabTot < 0 || eqIdx < 0) continue;
-    // 제목·단위: 이 표 바로 앞 글(앞 표 2개까지)
+    const keys = rows.map(r => keyName(cleanName(r[0] ?? "")));
+    if (!pick(keys)) continue;
     const before = xml.slice(Math.max(0, (tables[i - 2]?.start ?? tables[i].start - 3000)), tables[i].start);
     const ctxText = cellText(before + rows.slice(0, headRows).map(r => r.join(" ")).join(" "));
     const unit = findUnit(ctxText) ?? findUnit(cellText(rows.slice(0, 3).map(r => r.join(" ")).join(" ")));
-    const title = (ctxText.match(/(연\s*결\s*)?(재\s*무\s*상\s*태\s*표|대\s*차\s*대\s*조\s*표)/) ?? [""])[0].replace(/\s/g, "");
+    const title = (ctxText.match(/(연\s*결\s*)?(재\s*무\s*상\s*태\s*표|대\s*차\s*대\s*조\s*표|(포\s*괄\s*)?손\s*익\s*계\s*산\s*서|현\s*금\s*흐\s*름\s*표)/g) ?? [""]).pop()!.replace(/\s/g, "");
     const warnings: string[] = [];
-    // 칸 구성: 머리 행에서 '주석' 칸과 금액 칸을 가린다
     const width = Math.max(...rows.map(r => r.length));
     const head = rows.slice(0, Math.max(headRows, 1));
     const headText = (c: number) => norm(head.map(r => r[c] ?? "").join(" "));
     let noteCol = -1;
     for (let c = 1; c < width; c++) if (/^주석|^주$|^註/.test(headText(c))) { noteCol = c; break; }
     let amountCols = Array.from({ length: width - 1 }, (_, k) => k + 1).filter(c => c !== noteCol);
-    // 머리 행이 없거나 '과목' 머리가 표 안에 있으면 숫자가 실제로 들어오는 칸만 남긴다
     const numericCount = (c: number) => rows.filter(r => parseAmount(r[c] ?? "") !== null && (r[c] ?? "").trim() !== "").length;
     amountCols = amountCols.filter(c => numericCount(c) > 0);
     if (noteCol < 0 && amountCols.length % 2 === 1 && amountCols.length >= 3) {
-      // 주석 칸 머리를 못 찾았는데 금액 칸이 홀수면 첫 칸이 주석 번호일 가능성 — 값이 작은 정수뿐이면 뺀다
       const c0 = amountCols[0];
       const vals = rows.map(r => parseAmount(r[c0] ?? "")).filter((v): v is number => v !== null);
       if (vals.length && vals.every(v => Number.isInteger(v) && Math.abs(v) < 100)) { amountCols = amountCols.slice(1); warnings.push("주석 번호 칸을 머리 없이 판정"); }
     }
     if (!amountCols.length) continue;
-    const curCols = amountCols.slice(0, Math.max(1, Math.floor(amountCols.length / 2)));
+    // 머리에 기간 표기가 하나뿐이면(설립 첫 해 '제 1 기'만) 모든 금액 칸이 당기(실측: 삼양바이오팜 2025 별도)
+    const periodHeads = amountCols.map(c => headText(c)).filter(h => /제\d+|당기|전기|\d{4}/.test(h));
+    const single = periodHeads.length === 1 && amountCols.length <= 2;
+    const half = single ? amountCols.length : Math.max(1, Math.floor(amountCols.length / 2));
+    const curCols = amountCols.slice(0, half), prevCols = !single && amountCols.length > 1 ? amountCols.slice(half) : [];
+    if (single) warnings.push("기간 표기가 하나뿐인 표 — 모든 금액 칸을 당기로 봄");
     if (amountCols.length === 1) warnings.push("금액 칸이 하나뿐 — 당기 값으로 봄");
-    const out: HtmlBsRow[] = [];
+    const u = unit?.unit ?? 1;
+    const val = (row: string[], cols: number[]) => { for (const c of cols) { const t = (row[c] ?? "").trim(); const v = parseAmount(t); if (v !== null && t !== "") return { v: v * u, t }; } return null; };
+    const out: StmtRow[] = [];
     for (let r = headRows; r < rows.length; r++) {
-      const row = rows[r];
-      const nm = cleanName(row[0] ?? "");
+      const nm = cleanName(rows[r][0] ?? "");
       if (!nm) continue;
-      const n = keyName(nm);
-      if (/^(과목|계정과목|구분)$/.test(n)) continue;
-      let amount: number | null = null; let raw = "";
-      for (const c of curCols) { const v = parseAmount(row[c] ?? ""); if (v !== null && (row[c] ?? "").trim() !== "") { amount = v; raw = row[c]; break; } }
-      const sec = SECTION.find(([re]) => re.test(n));
-      if (sec) {
-        // 합계 행은 그 구역을 닫는다 — 다음 구역 머리가 올 때까지 아무 구역도 아님
-        out.push({ account_id: CLOSE.test(n) ? "ifrs-full_Equity" : sec[1], account_nm: nm, amount }); // Equity = 구역 없음(parseBs MARK)
-        continue;
-      }
-      out.push({ account_id: "", account_nm: nm.replace(/\s*\((주석?|註|Note)[^)]*\)+\s*$/i, "").trim(), amount: amount === null ? null : amount * (unit?.unit ?? 1), raw });
+      const key = keyName(nm);
+      if (/^(과목|계정과목|구분)$/.test(key)) continue;
+      const c = val(rows[r], curCols), p = val(rows[r], prevCols);
+      out.push({ name: nm.replace(/\s*\((주석?|註|Note)[^)]*\)+\s*$/i, "").trim(), key, cur: c?.v ?? null, prev: p?.v ?? null, raw: c?.t ?? "" });
     }
     if (!unit) warnings.push("단위 표기를 찾지 못해 원으로 봄 — 원문 확인");
-    return { rows: out, unit: unit?.unit ?? 1, unitLabel: unit?.label ?? "원(추정)", title, amountCols: amountCols.length, warnings };
+    return { rows: out, unit: u, unitLabel: unit?.label ?? "원(추정)", title, start: tables[i].start, amountCols: amountCols.length, warnings };
   }
   return null;
+}
+
+const BS_PICK = (k: string[]) => k.some(n => /^(부채총계|부채합계)$/.test(n)) && k.some(n => /^(자본총계|자본합계|부채와자본총계|자본과부채총계|부채및자본총계)$/.test(n));
+
+/** 재무상태표 표 찾기: 행 이름에 부채총계(합계)와 자본(총계)이 함께 있는 첫 표. 결과 행은 정형 재무제표 행 모양(parseBs 입력) */
+export function extractBalanceSheet(xml: string): HtmlBs | null {
+  const st = extractStatement(xml, BS_PICK);
+  if (!st) return null;
+  const out: HtmlBsRow[] = [];
+  for (const r of st.rows) {
+    const sec = SECTION.find(([re]) => re.test(r.key));
+    // 구역 머리 행 금액은 쓰지 않는다(원값 그대로 두던 이전 동작과 같게 단위 환산 전 값)
+    if (sec) { out.push({ account_id: CLOSE.test(r.key) ? "ifrs-full_Equity" : sec[1], account_nm: r.name, amount: r.cur === null ? null : r.cur / st.unit }); continue; } // Equity = 구역 없음(parseBs MARK)
+    out.push({ account_id: "", account_nm: r.name, amount: r.cur, raw: r.raw });
+  }
+  return { rows: out, unit: st.unit, unitLabel: st.unitLabel, title: st.title, amountCols: st.amountCols, warnings: st.warnings };
 }
