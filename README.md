@@ -14,7 +14,7 @@
 | `naver_market_snapshot` | 당일 시세·PER·PBR·컨센서스·네이버 동종업종 | 네이버 금융 |
 | `dart_business_section` | 사업보고서 "II. 사업의 내용" 장 전체를 마크다운으로(표 포함), 하위 항목 선택·쪽 나눠 받기. 원본은 Vercel Blob 비공개 저장소(`valuation-doc-cache`)에 접수번호 단위로 24시간 보관(`lib/doc-cache.ts`, 끄려면 `DOC_CACHE_DISABLED=1`). 만료분은 `api/doc-cache-cleanup.ts`가 매일 03:10 KST에 지운다(Vercel Cron, `CRON_SECRET` 인증) | OpenDART 원본 |
 | `dart_ebitda_inputs` | 감가상각비(유형·사용권자산·무형·투자부동산)와 영업이익·매출·지배주주순이익을 연간 또는 최근 12개월(TTM)로. 결과의 `peerRow`를 `peer_statistics`에 넣으면 EV/EBITDA 계산. 감가상각 태그가 없는 소형사는 원문 주석 표 발췌 | OpenDART XBRL 원본·원문 |
-| `dart_interest_bearing_debt` | 이자부부채를 계정 행 단위로 뽑아 차입금·사채·전환사채·리스·기타 차입성 부채로 분류(외부 `valuation_get_data`의 `ibd`와 같은 규칙). 본문에 리스 행이 없거나 차입금이 '금융부채' 한 줄에 묶여 있으면 XBRL 주석으로 보충. 상환전환우선주부채 등은 합계에서 빼고 따로 | OpenDART 재무상태표(fnlttSinglAcntAll)·XBRL 원본 |
+| `dart_interest_bearing_debt` | 이자부부채를 계정 행 단위로 뽑아 차입금·사채·전환사채·리스·기타 차입성 부채로 분류(외부 `valuation_get_data`의 `ibd`와 같은 규칙). 본문에 리스 행이 없거나 차입금이 '금융부채' 한 줄에 묶여 있으면 XBRL 주석으로 보충(본문 차입금에 리스가 이미 들어 있으면 더하지 않음). 상환전환우선주부채 등은 합계에서 빼고 따로. 정기보고서가 없는 비상장 외감법인은 감사보고서 원문 표(재무상태표·차입금·리스 주석)로 같은 규칙을 적용하고 감사의견을 알림 | OpenDART 재무상태표(fnlttSinglAcntAll)·XBRL 원본·감사보고서 원문(document.xml) |
 
 피어 모집단(`peergroup_get_population`)과 이자부부채가 포함된 분기말 밸류에이션 데이터(`valuation_get_data`)는 이 서버에 없습니다. 외부 서버 [kr-valuation-data](https://github.com/procpalee/DCF-Peergroup-Search)를 그대로 쓰고, 그 결과를 `peer_statistics` 에 넘기는 구성입니다. 이 서버의 일부 도구는 그 서버와 결과를 대조하는 용도로도 씁니다(아래 검증).
 
@@ -33,7 +33,8 @@
 | `beta_regression` | kr-valuation-data `compute_beta` 와 5종목 × 기준일 3개 × 주간·월간 30건 | 실질·조정베타·R²·관측치 전부 소수점 6자리 일치 |
 | `dart_business_section` | kr-valuation-data `get_business_content` 와 3개사 숫자 토큰 집합 비교 | 288·237·368개 전부 일치 |
 | `dart_ebitda_inputs` | 현금흐름표 본문에 감가상각비가 있는 8개사(2025 사업보고서)의 본문 합계와 대조, 공시 형태 5가지 합성 시험 | 8곳 전부 일치, 5가지 전부 통과 |
-| `dart_interest_bearing_debt` (2026-11-05) | 외부 `valuation_get_data` ibd 와 합계·범주 대조 — 상장사 표본, 기준일 3개(2025 사업보고서·2026 1분기·반기) | 합계 일치 2025 사업보고서 89/90, 2026 1분기 51/52, 반기 79/80. 불일치 2건은 외부가 주석 리스부채(LG화학)·주석 교환사채(한국전자홀딩스)를 넣지 않은 경우. 외부는 기준일 뒤 접수된 [첨부추가] 정정본을 쓰는 일이 있다(3곳, 금액 동일) |
+| `dart_interest_bearing_debt` (2026-11-05) | 외부 `valuation_get_data` ibd 와 합계 대조 — 상장사 표본, 기준일 3개(2025-12-31·2026-06-30·2026-09-30 → 2025 3분기·2026 1분기·2026 반기보고서) | 합계 일치 90/90, 52/52, 79/80. 남은 1건(한국전자홀딩스)은 외부가 장기차입금 주석 안의 교환사채를 넣지 않은 경우. 본문 차입금 행에 리스가 이미 들어 있는 회사(LG화학)는 리스를 더하지 않는다. 외부는 기준일 뒤 접수된 [첨부추가] 정정본을 쓰는 일이 있다(금액 동일) |
+| 감사보고서 원문 경로 (2026-11-05) | ① 상장사 2025 사업보고서에 첨부된 감사보고서 원문을 같은 규칙으로 읽어 정형 재무제표 결과·외부 ibd 와 대조 ② 감사보고서만 내는 비상장 외감법인 99곳(연결 17곳, 12월이 아닌 결산 9곳 포함) 원문 표를 사람이 대조 | ① 정형 결과와 71/83, 외부와 44/49 합계 일치. 다른 12건은 모두 원문 쪽이 더 많이 읽은 경우(정형 데이터에 빠진 본문 차입 행, 기타금융부채 안 리스) ② 재무상태표 인식 96/99(못 읽은 3곳은 의견거절로 재무제표 표 없음). 포괄 금융부채만 있고 차입 내역 표를 못 찾으면 partial |
 
 `npm test` 로 다시 돌릴 수 있습니다(`ECOS_API_KEY`, `DART_API_KEY` 필요. 외부 호출 없이 계산만 보려면 `npm run test:offline`).
 

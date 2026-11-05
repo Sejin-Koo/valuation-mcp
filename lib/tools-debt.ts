@@ -5,7 +5,7 @@ import { getInterestBearingDebt, type DebtResult } from "./debt.js";
 
 const DebtSchema = z.object({
   stock_codes: jsonArray(z.string().regex(/^[0-9A-Z]{6}$/)).optional().describe("종목코드 6자리 배열(최대 10개). 비상장사는 corp_code"),
-  corp_code: z.string().regex(/^\d{8}$/).optional().describe("DART 고유번호 8자리(stock_codes 대신, 1개사)"),
+  corp_code: z.string().regex(/^\d{8}$/).optional().describe("DART 고유번호 8자리(stock_codes 대신, 1개사). 감사보고서만 내는 비상장사도 됨"),
   valuation_date: yyyymmdd().describe("평가기준일 — 이 날까지 접수된 최신 정기보고서를 쓴다(valuation_get_data 와 같은 규칙)"),
 });
 
@@ -15,7 +15,7 @@ const SEC: Record<string, string> = { current: "유동", nonCurrent: "비유동"
 function render(r: DebtResult): string {
   const L: string[] = [];
   L.push(`### ${r.name ?? r.corp_code}${r.code ? ` (${r.code})` : ""} — ${r.report.fs === "CFS" ? "연결" : "별도"}`);
-  L.push(`보고서: ${r.report.name}(${r.report.rcept_no}, 접수 ${r.report.filed})`);
+  L.push(`보고서: ${r.report.name}(${r.report.rcept_no}, 접수 ${r.report.filed})${/감사보고서/.test(r.report.name) ? " — 감사보고서 원문 표에서 읽음" : ""}`);
   if (r.excluded) { L.push("", `이자부부채 계산 안 함: ${r.excluded}`); return L.join("\n"); }
   L.push("", `**이자부부채 합계 ${won(r.total)}원**${r.completeness === "partial" ? ` (일부 누락 가능: ${r.completenessReason})` : ""}`, "");
   L.push("| 구역 | 계정 | 금액 | 범주 | 출처 |", "|---|---|---:|---|---|");
@@ -33,6 +33,7 @@ export function registerDebtTools(server: McpServer): void {
     title: "이자부부채 분류 (차입금·사채·전환사채·리스)",
     description: `평가기준일까지 접수된 최신 정기보고서의 재무상태표에서 이자부부채를 계정 행 단위로 뽑아 범주(borrowings 차입금, bonds 사채, convertible 전환사채·신주인수권부사채·교환사채, borrowingsAndBonds 구분 불가, lease 리스부채, otherDebt 유동화채무 등)로 나눕니다. 외부 valuation_get_data 의 ibd 와 같은 규칙입니다.
 - 출처: DART 단일회사 전체 재무제표(본문). 본문에 리스부채 행이 없거나 차입금이 '금융부채' 한 줄에 묶여 있으면 XBRL 원본 주석으로 보충합니다(그때만 종목당 25~40초 더 걸림).
+- 정기보고서(사업·반기·분기)가 없는 비상장 외감법인은 평가기준일까지 접수된 최신 감사보고서(연결 우선) 원문 표에서 같은 규칙으로 읽습니다. 결산일 기준 값이라 평가기준일과의 차이를 notes 로 알리고, 감사의견이 적정이 아니면 checks 에 올립니다.
 - 차감계정(사채할인발행차금·전환권조정 등)은 본계정 범주에 음수로 넣습니다. 상환전환우선주부채 등 부채성 항목은 합계에서 빼고 debtLike 로 따로 줍니다.
 - 매각예정 처분자산집단 부채는 넣지 않고 참고로 알립니다. 금융업 재무상태표(유동/비유동 구분 없이 예수부채 등)는 계산하지 않습니다.
 - checks 는 원문 확인이 필요한 경고입니다. completeness=partial 이면 차입 일부가 빠졌을 수 있습니다.

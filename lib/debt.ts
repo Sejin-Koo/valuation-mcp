@@ -10,10 +10,12 @@
  * 2. 주석 보충 — 본문에 리스부채 행이 없거나(기타금융부채 등에 포함), 차입금이 '금융부채' 한 줄에 묶여 있으면
  *    XBRL 원본(fnlttXbrl.xml, 25~40초)의 주석 태그로 채운다.
  *
- * 외부 값과의 대조(2026-11-05 실측, 상장사 표본): 2025 사업보고서 90곳 중 89곳, 2026 1분기 52곳 중 51곳 합계 일치.
- * 남은 1곳(LG화학)은 외부가 주석 리스부채를 넣지 않은 경우로, 이 도구는 넣는다(본문 기타금융부채에 포함된 리스).
+ * 외부 값과의 대조(2026-11-05 실측, 상장사 표본, 합계): 2025 3분기 90/90, 2026 1분기 52/52, 2026 반기 79/80.
+ * 본문 차입금 행에 리스가 이미 들어 있으면(주석 차입·사채 태그 + 리스 태그 = 본문) 리스를 더하지 않는다(LG화학).
+ * 3. 정기보고서가 없는 비상장 외감법인은 감사보고서 원문 표로 같은 규칙을 적용한다(debt-audit.ts).
  */
 import { DartError, resolveCorp } from "./dart.js";
+import { debtFromAuditReport } from "./debt-audit.js";
 import { periodicReportsUntil, reprtCode, downloadXbrl, type PeriodicReport, type XbrlDoc } from "./xbrl.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
@@ -88,7 +90,7 @@ export function classify(nm: string, aid: string): Cls {
   const n = nm.replace(/\s/g, "");
   if (/상환우선주|전환우선주/.test(n)) return "debtLike";
   if (EXCL.test(n) && !/차입|사채/.test(n)) return null;
-  if (n.includes("리스부채") || aid.includes("LeaseLiabilities")) return "lease";
+  if (/리스(유동|비유동|장기|단기)?부채/.test(n) || aid.includes("LeaseLiabilities")) return "lease";
   if (/전환권조정|신주인수권조정|교환권조정/.test(n)) return "convertible";
   if (/유동화/.test(n)) return "otherDebt";
   if (/전환사채|신주인수권부사채|교환사채/.test(n) || /Convertible|Exchangeable|Warrant/.test(aid)) return "convertible";
@@ -109,22 +111,27 @@ function debtLikeType(nm: string): DebtLike["type"] {
 
 interface BsParse { lines: DebtLine[]; catchAll: { section: Section; name: string; amount: number }[]; debtLike: DebtLike[]; heldForSale: number | null; hasSections: boolean; financialLike: boolean }
 
-export function parseBs(rows: BsRow[]): BsParse {
+export function parseBs(rows: BsRow[], opt: { attachContra?: boolean } = {}): BsParse {
   let sec: Section | null = null;
   let lines: DebtLine[] = []; let catchAll: BsParse["catchAll"] = []; const debtLike: DebtLike[] = [];
   let heldForSale: number | null = null;
+  let lastWasDebt = false;
   const hasSections = rows.some(r => r.account_id === "ifrs-full_CurrentLiabilities" || r.account_id === "ifrs-full_NoncurrentLiabilities");
   const financialLike = !hasSections && rows.some(r => /예수부채|보험계약부채|투자계약부채|고객예탁금|예수금/.test(r.account_nm.replace(/\s/g, "")));
   for (const r of rows) {
     if (r.account_id in MARK) { sec = MARK[r.account_id]; continue; }
     if (r.account_id === "ifrs-full_LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale" || /매각예정.*부채/.test(r.account_nm)) { heldForSale = r.amount; continue; }
     if (!sec || !r.amount) continue;
-    const c = classify(r.account_nm, r.account_id);
+    let c = classify(r.account_nm, r.account_id);
+    // 감사보고서 원문: 차입금 바로 뒤의 '현재가치할인차금' 등은 그 차입금의 차감계정(실측: 영산클린에너지 2025)
+    const prev = lines[lines.length - 1];
+    if (!c && opt.attachContra && CONTRA.test(r.account_nm.replace(/\s/g, "")) && prev && prev.section === sec && lastWasDebt) c = prev.category;
+    lastWasDebt = false;
     if (c === "debtLike") { debtLike.push({ name: r.account_nm, amount: r.amount, type: debtLikeType(r.account_nm) }); continue; }
     if (c) {
       let v = r.amount;
       if (CONTRA.test(r.account_nm.replace(/\s/g, "")) && v > 0) v = -v; // 차감계정은 본계정 범주에 음수로
-      lines.push({ section: sec, name: r.account_nm, amount: v, category: c, source: "본문", tag: r.account_id });
+      lines.push({ section: sec, name: r.account_nm, amount: v, category: c, source: "본문", tag: r.account_id }); lastWasDebt = true;
     } else if (CATCH_ALL.test(r.account_nm.replace(/\s/g, ""))) catchAll.push({ section: sec, name: r.account_nm, amount: r.amount });
   }
   // 유동/비유동 구분이 있는 회사는 구분 밖 행을 쓰지 않는다(실측: 케이프 — 증권업 부채 블록의 차입부채는 금융업 차입)
@@ -132,8 +139,11 @@ export function parseBs(rows: BsRow[]): BsParse {
   // 부모 합계 행 제거 — 바로 뒤 연속 행들의 합과 같으면 부모로 본다(실측: 스팩 '차입부채' = 전환사채 + 전환권조정)
   const keep: DebtLine[] = [];
   lines.forEach((l, i) => {
+    // 자식이 한 줄이면 부모 이름이 묶음 이름('차입부채' 등)일 때만 — 금액이 우연히 같은 바로 다음 한 줄을 부모로 오인하지 않게
+    // (실측: 메디픽셀 감사보고서 장기차입금 = 신주인수권부사채 5억 / 스팩 '차입부채' = 전환사채 한 줄)
+    const generic = /^(차입부채|차입금|차입금및사채|사채및차입금|금융부채|이자부부채)$/.test(l.name.replace(/\s/g, ""));
     let s = 0, parent = false;
-    for (let j = i + 1; j < lines.length && lines[j].section === l.section; j++) { s += lines[j].amount; if (Math.abs(s - l.amount) <= 1) { parent = true; break; } }
+    for (let j = i + 1; j < lines.length && lines[j].section === l.section; j++) { s += lines[j].amount; if ((j > i + 1 || generic) && Math.abs(s - l.amount) <= 1) { parent = true; break; } }
     if (!parent) keep.push(l);
   });
   return { lines: keep, catchAll, debtLike, heldForSale, hasSections, financialLike };
@@ -177,7 +187,8 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
   const corp = resolveCorp({ stock_code: input.stock_code, corp_code: input.corp_code });
   const until = input.valuation_date.replace(/-/g, "");
   const all = await periodicReportsUntil(corp.corp_code, until);
-  if (!all.length) throw new DartError(`${until} 까지 접수된 정기보고서가 없습니다.`, "NO_REPORT");
+  // 정기보고서가 없는 회사(감사보고서만 내는 비상장 외감법인)는 감사보고서 원문 표로 낸다(2026-11-05)
+  if (!all.length) return debtFromAuditReport(corp, until);
   const annuals = all.filter(r => r.kind === "annual");
   const fyEndMonth = annuals.length ? Number(annuals[0].periodEnd.slice(4)) : 12;
   const target: PeriodicReport = all[0];
@@ -208,13 +219,35 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
     try { nf = instantFacts(await downloadXbrl(target.rcept_no, rc, input.deadline), isoEnd(target.periodEnd), scope); }
     catch (e) { checks.push(`주석(XBRL)을 받지 못해 보충하지 못함 — ${(e as Error).message}`); }
     if (nf) {
+      // 본문 차입금 행에 리스가 이미 들어 있는지: 본문 차입 합 = 주석 차입·사채 태그 합 + 리스 태그 이면 포함(실측: LG화학 2025 '차입금' 행 = 차입금·사채 + 리스)
+      const inside = (sec: Section, lease: number | undefined, borrowAlts: string[][], bondAlts: string[][]) => {
+        if (!lease) return false;
+        const bs = lines.filter(l => l.section === sec && l.category !== "lease").reduce((a, l) => a + l.amount, 0);
+        const tol = Math.max(1e6, Math.abs(bs) * 0.0005);
+        if (bs <= 0) return false;
+        const sums = (alts: string[][]) => alts.map(alt => alt.reduce((a, t) => a + (nf!.get(t) ?? 0), 0));
+        // 태그 묶음 중 하나라도 '차입·사채 + 리스 = 본문, 차입·사채 ≠ 본문' 이면 리스 포함
+        for (const b of sums(borrowAlts)) for (const d of [0, ...sums(bondAlts)]) {
+          if (!(b + d)) continue;
+          if (Math.abs(b + d + lease - bs) <= tol && Math.abs(b + d - bs) > tol) return true;
+        }
+        return false;
+      };
       if (needLease) {
-        const cl = nf.get("CurrentLeaseLiabilities"), nl = nf.get("NoncurrentLeaseLiabilities"), tl = nf.get("LeaseLiabilities");
+        let cl = nf.get("CurrentLeaseLiabilities"), nl = nf.get("NoncurrentLeaseLiabilities");
+        const tl = nf.get("LeaseLiabilities");
+        const inC = inside("current", cl, [["ShorttermBorrowings", "CurrentPortionOfLongtermBorrowings"], ["ShorttermBorrowings", "CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived"], ["CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived"], ["CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"]], [["CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued"]]);
+        const inN = inside("nonCurrent", nl, [["NoncurrentPortionOfNoncurrentLoansReceived"], ["NoncurrentPortionOfOtherNoncurrentBorrowings"], ["LongtermBorrowings"]], [["NoncurrentPortionOfNoncurrentBondsIssued"]]);
+        if (inC || inN) {
+          notes.push(`본문 차입금 행에 리스부채가 포함돼 있어(주석 차입·사채 + 리스 = 본문 금액) ${inC && inN ? "" : inC ? "유동 " : "비유동 "}리스부채를 따로 더하지 않음`);
+          if (inC) cl = undefined;
+          if (inN) nl = undefined;
+        }
         if (cl || nl) {
           if (cl) lines.push({ section: "current", name: "리스부채(주석)", amount: cl, category: "lease", source: "주석", tag: "ifrs-full:CurrentLeaseLiabilities" });
           if (nl) lines.push({ section: "nonCurrent", name: "리스부채(주석)", amount: nl, category: "lease", source: "주석", tag: "ifrs-full:NoncurrentLeaseLiabilities" });
           notes.push("본문에 리스부채 행이 없어 주석 리스부채를 넣음 — 본문 기타금융부채·기타부채 등에 포함된 것으로 봄");
-        } else if (tl) {
+        } else if (tl && !inC && !inN) {
           lines.push({ section: "unclassified", name: "리스부채(주석, 유동 구분 없음)", amount: tl, category: "lease", source: "주석", tag: "ifrs-full:LeaseLiabilities" });
           notes.push("본문에 리스부채 행이 없어 주석 리스부채 총액을 넣음(유동·비유동 구분 없음)");
         }
