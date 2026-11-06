@@ -16,6 +16,7 @@
  */
 import { DartError, resolveCorp } from "./dart.js";
 import { debtFromAuditReport } from "./debt-audit.js";
+import { summarize, type Verification, type VerifyItem } from "./verify.js";
 import { periodicReportsUntil, reprtCode, downloadXbrl, type PeriodicReport, type XbrlDoc } from "./xbrl.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
@@ -41,6 +42,7 @@ export interface DebtResult {
   completeness: "full" | "partial"; completenessReason: string | null;
   notes: string[]; checks: string[];
   excluded: string | null;
+  verification?: Verification;   // tools-debt 에서 debtVerification 으로 채움
 }
 
 const CAT_LABEL: Record<DebtCategory, string> = {
@@ -302,4 +304,15 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
 
 function zeroCats(): Record<DebtCategory, number> {
   return { borrowings: 0, bonds: 0, convertible: 0, borrowingsAndBonds: 0, lease: 0, otherDebt: 0 };
+}
+
+/** 신뢰 표시(2026-11-06): 일부 미확인·검산 불일치·감사의견은 원문 확인 필요, 주석에서 보충한 행과 그 밖의 경고는 주의 */
+export function debtVerification(r: DebtResult): Verification {
+  if (r.excluded) return summarize([]);
+  const items: VerifyItem[] = [];
+  if (r.completeness === "partial") items.push({ level: "verify", item: "이자부부채", message: r.completenessReason ?? "차입 일부를 확인하지 못함" });
+  const noted = r.lines.filter(l => l.source === "주석");
+  if (noted.length) items.push({ level: "warn", item: "이자부부채", message: `주석에서 보충한 행: ${noted.map(l => `${l.name} ${Math.round(l.amount).toLocaleString("ko-KR")}`).join(", ")}` });
+  for (const c of r.checks) items.push({ level: /^검산:|감사의견|찾지 못함/.test(c) ? "verify" : "warn", item: /^검산:/.test(c) ? "재무상태표" : "이자부부채", message: c.replace(/^검산:\s*/, "") });
+  return summarize(items);
 }

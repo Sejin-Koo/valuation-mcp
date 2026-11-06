@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { yyyymmdd, text, fail, defineTool } from "./common.js";
 import { getAuditFinancials, type AuditFinResult } from "./audit-fin.js";
+import { renderVerification } from "./verify.js";
 
 const Schema = z.object({
   corp_code: z.string().regex(/^\d{8}$/).describe("DART 고유번호 8자리(dart_search_corp_code 로 확인)"),
@@ -34,7 +35,9 @@ function render(r: AuditFinResult): string {
   }
   const src = Object.entries(r.sources).map(([k, v]) => `${k} ← ${v}`);
   if (src.length) L.push("", `읽은 행: ${src.join(" · ")}`);
-  if (r.warnings.length) L.push("", ...r.warnings.map(w => `- ⚠ ${w}`));
+  L.push("", ...renderVerification(r.verification));
+  const extra = r.warnings.filter(w => /결산일/.test(w));
+  if (extra.length) L.push("", ...extra.map(w => `- ⚠ ${w}`));
   return L.join("\n");
 }
 
@@ -46,6 +49,7 @@ export function registerAuditTools(server: McpServer): void {
 - 기준일까지 접수된 최신 감사보고서(연결 우선)의 당기·전기 칸, years=3 이면 그 전 해 감사보고서의 전기 칸까지 3개 연도. 이자부부채(dart_interest_bearing_debt 와 같은 규칙)와 순차입금도 함께 줍니다.
 - 감사보고서는 결산기 1회라 평가기준일과의 개월 차이를 경고로 알립니다. 감사의견이 적정이 아니면 경고합니다.
 - 사용권자산 상각이 감가상각비에 들어 있는지 판정하지 못하면 더하지 않고 경고합니다(리스부채를 순차입금에 넣었다면 원문 확인). '읽은 행'으로 어느 표·행에서 읽었는지 확인할 수 있습니다.
+- verification(검증): 표 안의 합계 관계(자산=부채+자본, 유동+비유동, 매출−매출원가=매출총이익, 세전이익−법인세=순이익), 올해 보고서 전기 칸 = 작년 보고서 당기 칸, 이자부부채 ≤ 부채총계를 스스로 검산해 '확인됨'·'주의'·'원문 확인 필요'로 표시합니다. 답변에는 '원문 확인 필요' 항목만 원문 위치와 함께 알리고, 확인됨이면 따로 언급하지 않습니다. 주석·변동표에서 읽은 값은 검산으로 잡히지 않아 늘 '주의'입니다.
 - 상장사·사업보고서 제출 비상장사는 정기보고서에 감사보고서가 첨부되므로 이 도구가 아니라 dart_ebitda_inputs·valuation_get_data 를 씁니다.`,
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, Schema, async (a: z.infer<typeof Schema>) => {

@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { jsonArray, yyyymmdd, text, fail, defineTool } from "./common.js";
-import { getInterestBearingDebt, type DebtResult } from "./debt.js";
+import { getInterestBearingDebt, debtVerification, type DebtResult } from "./debt.js";
+import { renderVerification } from "./verify.js";
 
 const DebtSchema = z.object({
   stock_codes: jsonArray(z.string().regex(/^[0-9A-Z]{6}$/)).optional().describe("종목코드 6자리 배열(최대 10개). 비상장사는 corp_code"),
@@ -24,7 +25,7 @@ function render(r: DebtResult): string {
   if (cats.length) L.push("", `범주별: ${cats.join(" · ")}`);
   if (r.debtLike.length) L.push("", `합계에서 제외한 부채성 항목(희석 또는 부채 가산 검토): ${r.debtLike.map(d => `${d.name} ${won(d.amount)}(${d.type})`).join(", ")}`);
   if (r.notes.length) L.push("", ...r.notes.map(n => `- 참고: ${n}`));
-  if (r.checks.length) L.push("", ...r.checks.map(c => `- ⚠ ${c}`));
+  if (r.verification) L.push("", ...renderVerification(r.verification));
   return L.join("\n");
 }
 
@@ -36,7 +37,7 @@ export function registerDebtTools(server: McpServer): void {
 - 정기보고서(사업·반기·분기)가 없는 비상장 외감법인은 평가기준일까지 접수된 최신 감사보고서(연결 우선) 원문 표에서 같은 규칙으로 읽습니다. 결산일 기준 값이라 평가기준일과의 차이를 notes 로 알리고, 감사의견이 적정이 아니면 checks 에 올립니다.
 - 차감계정(사채할인발행차금·전환권조정 등)은 본계정 범주에 음수로 넣습니다. 상환전환우선주부채 등 부채성 항목은 합계에서 빼고 debtLike 로 따로 줍니다.
 - 매각예정 처분자산집단 부채는 넣지 않고 참고로 알립니다. 금융업 재무상태표(유동/비유동 구분 없이 예수부채 등)는 계산하지 않습니다.
-- checks 는 원문 확인이 필요한 경고입니다. completeness=partial 이면 차입 일부가 빠졌을 수 있습니다.
+- verification(검증): '확인됨'·'주의'·'원문 확인 필요'. 원문 확인 필요 = 차입 일부 미확인·재무상태표 검산 불일치(자산≠부채+자본 등)·감사의견 비적정, 주의 = 주석에서 보충한 행·그 밖의 경고. 답변에는 '원문 확인 필요' 항목만 원문 위치와 함께 알리고, 확인됨이면 따로 언급하지 않습니다.
 - 순차입금 = total − 현금및현금성자산 − 단기금융상품. 리스 제외 = total − byCategory.lease.`,
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, DebtSchema, async (a: z.infer<typeof DebtSchema>) => {
@@ -47,7 +48,7 @@ export function registerDebtTools(server: McpServer): void {
       const deadline = Date.now() + 270_000;
       const targets: { stock_code?: string; corp_code?: string }[] = codes.length ? codes.map(c => ({ stock_code: c })) : [{ corp_code: a.corp_code }];
       const results = await Promise.all(targets.map(t => getInterestBearingDebt({ ...t, valuation_date: a.valuation_date, deadline })
-        .then(r => ({ ok: true as const, r }), (e: Error) => ({ ok: false as const, id: t.stock_code ?? t.corp_code, e: e.message }))));
+        .then(r => ({ ok: true as const, r: { ...r, verification: debtVerification(r) } }), (e: Error) => ({ ok: false as const, id: t.stock_code ?? t.corp_code, e: e.message }))));
       const body = results.map(x => (x.ok ? render(x.r) : `### ${x.id}\n\n오류: ${x.e}`)).join("\n\n---\n\n");
       return {
         ...text(`이자부부채 — 출처: DART 재무상태표(필요 시 XBRL 주석), 평가기준일 ${a.valuation_date}\n\n${body}`),

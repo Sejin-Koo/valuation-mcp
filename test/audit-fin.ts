@@ -40,4 +40,15 @@ const c = financialsFromAuditXml(xml3);
 assert.equal(c.years[0].revenue, 300); assert.equal(c.years[0].totalAssets, 1000); assert.equal(c.years[1].revenue, null);
 ok("설립 첫 해 단일 기간 표");
 
+// 4. 검산(2026-11-06): 구역 세부 합계·자산=부채+자본·세전−법인세=순이익이 맞으면 원문 확인 필요 없음, 행 하나를 틀리게 적으면 잡힘
+const bsOk = (cash: string) => tbl("재무상태표", "백만원", H,
+  tr("유동자산", "", "300", "") + tr("현금및현금성자산", "", cash, "") + tr("매출채권", "", "200", "") + tr("비유동자산", "", "700", "") + tr("유형자산", "", "700", "") + tr("자산총계", "", "1,000", "") +
+  tr("유동부채", "", "400", "") + tr("매입채무", "", "400", "") + tr("부채총계", "", "400", "") + tr("자본총계", "", "600", "")) +
+  tbl("손익계산서", "백만원", H, tr("매출액", "", "900", "") + tr("매출원가", "", "600", "") + tr("매출총이익", "", "300", "") + tr("영업이익", "", "100", "") + tr("법인세비용차감전순이익", "", "90", "") + tr("법인세비용", "", "20", "") + tr("당기순이익", "", "70", ""));
+const good = financialsFromAuditXml(bsOk("100")).checks.filter(x => x.level === "verify" && x.item !== "현금흐름표");
+assert.equal(good.length, 0, JSON.stringify(good));
+const bad = financialsFromAuditXml(bsOk("110")).checks.filter(x => x.level === "verify");
+assert.ok(bad.some(x => /유동자산 아래 행들의 합/.test(x.message)));
+ok("검산: 맞는 표는 통과, 현금 한 행 오독은 원문 확인 필요");
+
 console.log(`audit-fin: ${n}건 통과`);
