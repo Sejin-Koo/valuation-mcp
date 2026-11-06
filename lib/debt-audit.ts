@@ -8,7 +8,7 @@
  */
 import { DartError, downloadDocument } from "./dart.js";
 import { parseBs, classify, type DebtResult, type DebtLine, type DebtLike, type Section, type DebtCategory } from "./debt.js";
-import { extractBalanceSheet, tableGrid, cleanName, parseAmount } from "./audit-bs.js";
+import { extractBalanceSheet, extractStatement, tableGrid, cleanName, parseAmount } from "./audit-bs.js";
 
 export interface AuditDebt {
   total: number; lines: DebtLine[]; debtLike: DebtLike[]; notes: string[]; checks: string[];
@@ -349,17 +349,35 @@ const CAT_LABEL: Record<DebtCategory, string> = {
 };
 
 /** 정기보고서가 없는 회사: 기준일까지 접수된 최신 감사보고서(연결 우선)로 이자부부채를 낸다. */
+/** 재무상태표 검산(2026-11-06): 자산 = 부채 + 자본, 유동 + 비유동 = 부채총계, 이자부부채 ≤ 부채총계. 안 맞으면 '검산:' 으로 시작하는 문장 */
+export function bsChecks(xml: string, ibdTotal: number): string[] {
+  const st = extractStatement(xml, k => k.some(n => /^(부채총계|부채합계)$/.test(n)) && k.some(n => /^(자본총계|자본합계|부채와자본총계|자본과부채총계|부채및자본총계)$/.test(n)));
+  if (!st) return [];
+  const get = (re: RegExp) => { const r = st.rows.find(x => re.test(x.key) && x.cur !== null); return r ? r.cur : null; };
+  const near = (x: number, y: number) => Math.abs(x - y) <= Math.max(1.5e6, Math.abs(y) * 0.0005);
+  const f = (v: number) => Math.round(v).toLocaleString("ko-KR");
+  const out: string[] = [];
+  const ta = get(/^자산(총계|합계)$/), tl = get(/^부채(총계|합계)$/), te = get(/^자본(총계|합계)$/);
+  const cl = get(/^유동부채(합계|총계)?$/), ncl = get(/^(비유동부채|고정부채)(합계|총계)?$/);
+  if (ta !== null && tl !== null && te !== null && !near(ta, tl + te)) out.push(`검산: 자산총계 ${f(ta)} ≠ 부채총계 ${f(tl)} + 자본총계 ${f(te)} — 재무상태표 읽기 확인`);
+  const hL = st.rows.filter(x => /매각예정.*부채|처분자산집단.*부채/.test(x.key)).reduce((s2, x) => s2 + (x.cur ?? 0), 0);
+  if (cl !== null && ncl !== null && tl !== null && !near(cl + ncl, tl) && !near(cl + ncl + hL, tl)) out.push(`검산: 유동부채 + 비유동부채 ${f(cl + ncl)} ≠ 부채총계 ${f(tl)} — 재무상태표 읽기 확인`);
+  if (tl !== null && ibdTotal > tl * 1.0005) out.push(`검산: 이자부부채 ${f(ibdTotal)}가 부채총계 ${f(tl)}보다 큼 — 행 착오`);
+  if (st.warnings.some(w => /단위 표기/.test(w))) out.push("검산: 단위(원·천원·백만원) 표기를 찾지 못해 원으로 봄 — 금액 자릿수 확인");
+  return out;
+}
+
 export async function debtFromAuditReport(corp: { corp_code: string; stock_code: string | null; corp_name: string | null }, until: string): Promise<DebtResult> {
   const reps = await auditReportsUntil(corp.corp_code, until);
   if (!reps.length) throw new DartError(`${until} 까지 접수된 정기보고서·감사보고서가 없습니다.`, "NO_REPORT");
   const rep = reps[0];
   const files = await downloadDocument(rep.rcept_no);
   // 본문 파일(감사보고서) — 재무상태표가 잡히는 첫 파일
-  let a: AuditDebt | null = null;
-  for (const f of files) { const r = debtFromAuditXml(f.xml); if (!r.noBs) { a = r; break; } a = a ?? r; }
+  let a: AuditDebt | null = null; let ax = "";
+  for (const f of files) { const r = debtFromAuditXml(f.xml); if (!r.noBs) { a = r; ax = f.xml; break; } if (!a) { a = r; ax = f.xml; } }
   const res = a!;
   const notes = [...res.notes];
-  const checks = [...res.checks];
+  const checks = [...res.checks, ...bsChecks(ax, res.total)];
   const months = (Number(until.slice(0, 4)) - Number(rep.periodEnd.slice(0, 4))) * 12 + Number(until.slice(4, 6)) - Number(rep.periodEnd.slice(4));
   notes.unshift(`정기보고서(사업·반기·분기)가 없는 회사라 감사보고서 원문 표에서 읽음(단위 ${res.unitLabel}). 결산일 ${rep.periodEnd.slice(0, 4)}.${rep.periodEnd.slice(4)} 기준 값${months > 3 ? ` — 평가기준일과 ${months}개월 차이, 그 사이 차입 변동은 반영되지 않음` : ""}`);
   if (res.heldForSale) notes.push(`매각예정 처분자산집단 부채 ${eok(res.heldForSale)}은 이자부부채에 넣지 않음`);

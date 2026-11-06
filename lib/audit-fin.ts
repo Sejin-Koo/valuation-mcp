@@ -9,6 +9,7 @@
 import { extractStatement, tableGrid, cleanName, keyName, parseAmount, type Statement, type StmtRow } from "./audit-bs.js";
 import { noteTables, priorYearTable, labels, auditReportsUntil, auditOpinion, debtFromAuditXml, type NoteTable, type AuditReport } from "./debt-audit.js";
 import { DartError, resolveCorp, downloadDocument } from "./dart.js";
+import { summarize, near, type VerifyItem, type Verification } from "./verify.js";
 
 export interface YearFin {
   period: "당기" | "전기";
@@ -24,6 +25,7 @@ export interface AuditFin {
   sources: Record<string, string>;   // 항목 → 읽은 표·행
   warnings: string[];
   found: { bs: boolean; is: boolean; cf: boolean };
+  checks: VerifyItem[];             // 검산 결과(verify.ts) — getAuditFinancials 에서 감사의견·연도 연결·이자부부채 검산을 더해 요약
 }
 
 const norm = (s: string) => s.replace(/\s/g, "");
@@ -135,7 +137,7 @@ export function financialsFromAuditXml(xml: string): AuditFin {
       period,
       revenue: pick(is, /^(매출액|매출|수익\(매출액\)|매출액\(수익\)|영업수익|영업수익\(매출액\)|매출액\(영업수익\)|수익|매출및지분법손익|매출액및지분법손익)$/, "매출").v,
       operatingIncome: pick(is, OP, "영업이익").v,
-      pretaxIncome: pick(is, /^법인세(비용)?(차감|공제)전(계속)?(영업)?(순)?(이익|손실|손익)(\((이익|손실)\))?$/, "법인세차감전이익").v,
+      pretaxIncome: pick(is, /^법인세(비용)?(차감|공제)전(계속)?(영업|사업)?(순)?(이익|손실|손익)(\((이익|손실)\))?$/, "법인세차감전이익").v,
       netIncome: null, netIncomeParent: null,
       depreciation: null, amortization: null, rightOfUseDepreciation: null, investmentPropertyDepreciation: null, depreciationAmortization: null, ebitda: null,
       operatingCashFlow: pick(cf, /^영업활동(으로인한|에서발생한|으로부터의|으로부터|에서창출된)?(순)?현금(흐름|유입|유출)/, "영업활동현금흐름").v,
@@ -220,7 +222,72 @@ export function financialsFromAuditXml(xml: string): AuditFin {
   }
   if (years[0].depreciationAmortization === null) warnings.push("감가상각비를 현금흐름표·현금흐름 주석에서 찾지 못함 — EBITDA 미계산(유형자산 주석 확인)");
   if (years[0].revenue === null) warnings.push("매출 행을 찾지 못함(업종별 계정명 확인)");
-  return { years, unitLabel: bs?.unitLabel ?? is?.unitLabel ?? "", sources, warnings, found: { bs: !!bs, is: !!is, cf: !!cf } };
+
+  // ── 검산(2026-11-06): 표 안의 합계 관계가 맞는지. 안 맞으면 표 읽기(칸·단위·행) 오류일 가능성이 크다 ──
+  const checks: VerifyItem[] = [];
+  const V = (item: string, message: string) => checks.push({ level: "verify", item, message });
+  const W = (item: string, message: string) => checks.push({ level: "warn", item, message });
+  const fmt = (v: number) => Math.round(v).toLocaleString("ko-KR");
+  for (const [nm, st] of [["재무상태표", bs], ["손익계산서", is], ["현금흐름표", cf]] as const) {
+    if (!st) V(nm, "표를 찾지 못함 — 이 표에서 읽는 항목은 비어 있음");
+    else if (st.warnings.some(w => /단위 표기/.test(w))) V(nm, "단위(원·천원·백만원) 표기를 찾지 못해 원으로 봄 — 금액 자릿수 확인");
+    else if (st.warnings.some(w => /기간 표기가 하나뿐/.test(w))) W(nm, "기간 표기가 하나뿐인 표(설립 첫 해 등) — 모든 금액 칸을 당기로 봄");
+    else if (st.warnings.some(w => /주석 번호 칸을 머리 없이/.test(w))) W(nm, "주석 번호 칸을 머리 없이 판정함");
+  }
+  const val = (st: Statement | null, re: RegExp, per: 0 | 1) => { const h = first(st, re); if (!h) return null; const v = per === 0 ? h.row.cur : h.row.prev; return v === null ? null : signFix(h.row, v); };
+  for (const per of [0, 1] as const) {
+    const y = years[per]; const tag = per === 0 ? "" : "(전기)";
+    if (y.totalAssets !== null && y.totalLiabilities !== null && y.totalEquity !== null && !near(y.totalAssets, y.totalLiabilities + y.totalEquity))
+      V(`재무상태표${tag}`, `자산총계 ${fmt(y.totalAssets)} ≠ 부채총계 ${fmt(y.totalLiabilities)} + 자본총계 ${fmt(y.totalEquity)}`);
+    const ca = val(bs, /^유동자산(합계|총계)?$/, per), nca = val(bs, /^(비유동자산|고정자산)(합계|총계)?$/, per);
+    // 매각예정 자산·부채가 유동·비유동 밖에 따로 있으면 더해서 본다(실측: 엑셈·SFA 2025)
+    const held = (re: RegExp) => (bs?.rows ?? []).filter(r => re.test(r.key)).reduce((a, r) => a + ((per === 0 ? r.cur : r.prev) ?? 0), 0);
+    const hA = held(/매각예정.*자산|처분자산집단.*자산/), hL = held(/매각예정.*부채|처분자산집단.*부채/);
+    if (ca !== null && nca !== null && y.totalAssets !== null && !near(ca + nca, y.totalAssets) && !near(ca + nca + hA, y.totalAssets)) V(`재무상태표${tag}`, `유동자산 + 비유동자산 ${fmt(ca + nca)} ≠ 자산총계 ${fmt(y.totalAssets)}`);
+    const cl = val(bs, /^유동부채(합계|총계)?$/, per), ncl = val(bs, /^(비유동부채|고정부채)(합계|총계)?$/, per);
+    if (cl !== null && ncl !== null && y.totalLiabilities !== null && !near(cl + ncl, y.totalLiabilities) && !near(cl + ncl + hL, y.totalLiabilities)) V(`재무상태표${tag}`, `유동부채 + 비유동부채 ${fmt(cl + ncl)} ≠ 부채총계 ${fmt(y.totalLiabilities)}`);
+    const cogs = val(is, /^매출원가$|^영업원가$/, per), gp = val(is, /^매출총(이익|손실|손익)(\((이익|손실)\))?$/, per);
+    if (y.revenue !== null && cogs !== null && gp !== null && !near(y.revenue - Math.abs(cogs), gp) && !near(y.revenue + cogs, gp)) V(`매출${tag}`, `매출 ${fmt(y.revenue)} − 매출원가 ${fmt(Math.abs(cogs))} ≠ 매출총이익 ${fmt(gp)}`);
+    const tax = val(is, /^(법인세(비용|수익|비용\(수익\)|등|비용\(이익\))|법인세)$/, per);
+    const disc = is?.rows.some(r => /중단영업/.test(r.key));
+    if (!disc && y.pretaxIncome !== null && tax !== null && y.netIncome !== null && !near(y.pretaxIncome - tax, y.netIncome) && !near(y.pretaxIncome + tax, y.netIncome))
+      V(`당기순이익${tag}`, `법인세차감전이익 ${fmt(y.pretaxIncome)} − 법인세 ${fmt(tax)} ≠ 당기순이익 ${fmt(y.netIncome)}`);
+    if (y.operatingIncome !== null && y.revenue !== null && y.revenue > 0 && y.operatingIncome > y.revenue) V(`영업이익${tag}`, `영업이익 ${fmt(y.operatingIncome)}이 매출 ${fmt(y.revenue)}보다 큼 — 행 착오 가능`);
+  }
+  // 구역 세부 합계: 유동자산·비유동자산·유동부채·비유동부채 아래 행들의 합 = 구역 소계(행 하나를 잘못 읽으면 여기서 걸린다).
+  // 일반기업회계기준의 중간 소계(당좌자산 등) 때문에 합이 소계의 2배가 되는 표, 매각예정 행이 섞인 표는 맞는 것으로 본다(실측: 상장·비상장 175개 문서 구역 675개 중 671개 통과, 나머지 4개는 매각예정).
+  if (bs) for (const per of [0, 1] as const) {
+    const rows = bs.rows; const HEAD = /^(유동자산|비유동자산|고정자산|유동부채|비유동부채|고정부채)$/;
+    const END = /^(자산총계|부채총계|자본|자본총계|부채|자산|유동자산|비유동자산|고정자산|유동부채|비유동부채|고정부채|자산합계|부채합계)$|합계$|총계$/;
+    const v = (r: StmtRow) => (per === 0 ? r.cur : r.prev);
+    for (let i = 0; i < rows.length; i++) {
+      if (!HEAD.test(rows[i].key)) continue;
+      let sub = v(rows[i]); let j = i + 1; const vals: number[] = []; let held = 0;
+      for (; j < rows.length && !END.test(rows[j].key); j++) { const x = v(rows[j]); if (x !== null) { vals.push(x); if (/매각예정|처분자산집단/.test(rows[j].key)) held += x; } }
+      if (sub === null && j < rows.length && /(합계|총계)$/.test(rows[j].key) && rows[j].key.startsWith(rows[i].key.slice(0, 3))) sub = v(rows[j]);
+      if (sub === null || !vals.length) continue;
+      const tot = vals.reduce((a, b) => a + b, 0);
+      // 부모 행(바로 뒤 연속 행들의 합과 같은 행)을 뺀 합도 본다
+      const keep = vals.slice();
+      for (let a2 = 0; a2 < keep.length; a2++) { let t = 0; for (let b = a2 + 1; b < keep.length; b++) { t += keep[b]; if (b > a2 + 1 && near(t, keep[a2])) { keep[a2] = 0; break; } } }
+      const tot2 = keep.reduce((a, b) => a + b, 0);
+      if ([tot, tot - held, tot / 2, (tot - held) / 2, tot2, tot2 - held].some(t => near(t, sub!))) continue;
+      (per ? W : V)(`재무상태표${per ? "(전기)" : ""}`, `${rows[i].name} 아래 행들의 합 ${fmt(tot)} ≠ ${rows[i].name} ${fmt(sub)} — 행 하나를 잘못 읽었을 수 있음`);
+    }
+  }
+  // 단위를 잘못 읽으면 합계 검산이 그대로 맞으므로 크기로 본다: 외부감사 대상인데 자산총계가 10억 원 미만이면 단위 확인
+  if (years[0].totalAssets !== null && Math.abs(years[0].totalAssets) < 1e9) W("단위", `자산총계 ${fmt(years[0].totalAssets)}원 — 외부감사 대상 회사로는 매우 작음, 원문 단위(원·천원·백만원) 확인`);
+  // 핵심 항목을 못 찾으면 주의(값이 비어 보이는 것과 별개로 이유를 남긴다)
+  const y0k = years[0];
+  for (const [k, label] of [["revenue", "매출"], ["operatingIncome", "영업이익"], ["pretaxIncome", "법인세차감전이익"], ["netIncome", "당기순이익"], ["cash", "현금및현금성자산"], ["operatingCashFlow", "영업활동현금흐름"], ["depreciationAmortization", "감가상각비"]] as const)
+    if (y0k[k] === null && (k !== "depreciationAmortization" || cf)) W(label, "해당 행을 찾지 못함 — 업종별 계정명이 다를 수 있음");
+  // 감가상각비: 주석·변동표에서 읽었거나 판정을 보류했으면 주의
+  for (const [k, v] of Object.entries(sources)) if (/상각/.test(k) && /주석|변동표/.test(v) && !/포함\(따로 더하지 않음\)/.test(v)) W(k, `현금흐름표가 아니라 ${v.replace(/ — .*/, "")}에서 읽음`);
+  for (const w of warnings) if (/사용권자산 상각 .*판정하지 못해/.test(w)) W("사용권자산상각비", w);
+  for (const w of warnings) if (/변동표 값을 씀/.test(w)) W("감가상각비", w);
+  if (rf.ppe && y0.depreciation !== null && sources["감가상각비"] && !/변동표/.test(sources["감가상각비"]) && (y0.depreciation > rf.ppe.v * 1.5 || y0.depreciation < rf.ppe.v * 0.5))
+    W("감가상각비", `현금흐름 감가상각비 ${fmt(y0.depreciation)}와 유형자산 변동표 ${fmt(rf.ppe.v)}가 크게 다름`);
+  return { years, unitLabel: bs?.unitLabel ?? is?.unitLabel ?? "", sources, warnings, found: { bs: !!bs, is: !!is, cf: !!cf }, checks };
 }
 
 // ─── 도구용 조립 ──────────────────────────────────────────
@@ -234,6 +301,7 @@ export interface AuditFinResult {
   netDebt: number | null;
   sources: Record<string, string>; warnings: string[];
   monthsSinceFiscalEnd: number;
+  verification: Verification;
 }
 
 /** 기준일까지 접수된 최신 감사보고서(연결 우선)와, 3개 연도가 필요하면 그 전 해 감사보고서로 연도별 재무를 낸다 */
@@ -273,10 +341,32 @@ export async function getAuditFinancials(input: { stock_code?: string; corp_code
   const warnings = [...cur.a.warnings, ...(prev ? prev.a.warnings.filter(w => !/감가상각비를/.test(w)).map(w => `[${prevRep!.report_nm}] ${w}`) : [])];
   const op = auditOpinion(cur.xml);
   if (op && op !== "적정") warnings.unshift(`감사의견 ${op} — 재무제표 금액을 그대로 믿기 어려움`);
+  const checks: VerifyItem[] = [...cur.a.checks, ...(prev ? prev.a.checks.filter(c => !/전기/.test(c.item)).map(c => ({ ...c, item: `${years[2]?.fiscalYear ?? "전전기"} ${c.item}` })).filter(c => c.level === "verify") : [])];
+  if (op && op !== "적정") checks.push({ level: "verify", item: "감사의견", message: `감사의견 ${op} — 재무제표 금액 자체를 그대로 믿기 어려움` });
+  // 연도 연결: 올해 보고서의 전기 칸 = 작년 보고서의 당기 칸(다르면 재작성이거나 어느 한쪽 읽기 오류)
+  if (prev) {
+    const p0 = prev.a.years[0], y1 = years[1];
+    for (const [k, label] of [["revenue", "매출"], ["operatingIncome", "영업이익"], ["netIncome", "당기순이익"], ["totalAssets", "자산총계"], ["totalEquity", "자본총계"]] as const) {
+      const a = y1[k], b = p0[k];
+      if (a !== null && b !== null && !near(a, b, 0.001)) checks.push({ level: Math.abs(a - b) > Math.max(Math.abs(b) * 0.05, 1e8) ? "verify" : "warn", item: `${label}(${y1.fiscalYear})`, message: `올해 보고서 전기 칸 ${Math.round(a).toLocaleString("ko-KR")} ≠ 작년 보고서 당기 칸 ${Math.round(b).toLocaleString("ko-KR")} — 전기 재작성이거나 표 읽기 오류` });
+    }
+  }
   if (months > 3) warnings.push(`결산일(${fy(latest.periodEnd, 0)}) 기준 값 — 평가기준일과 ${months}개월 차이. 반기 가결산 등 최근 자료가 있으면 그것을 우선`);
   return {
     code: corp.stock_code, corp_code: corp.corp_code, name: corp.corp_name ?? latest.corp_name, fs: latest.consolidated ? "CFS" : "OFS", unitLabel: cur.a.unitLabel, opinion: op,
     reports: [latest, ...(prevRep ? [prevRep] : [])].map(r => ({ name: r.report_nm, rcept_no: r.rcept_no, filed: r.rcept_dt, period: r.periodEnd })),
     years, interestBearingDebt: ibd, netDebt, sources: cur.a.sources, warnings, monthsSinceFiscalEnd: months,
+    verification: summarize([...checks, ...(ibd ? ibdChecks(ibd, y0.totalLiabilities) : [])]),
   };
+}
+
+/** 이자부부채 검산: 부채총계를 넘으면 행 착오, 일부 미확인이면 원문 확인, 주석에서 읽은 행은 주의 */
+export function ibdChecks(d: { total: number; completeness: string; lines: { name: string; amount: number; source: string }[]; checks: string[] }, totalLiabilities: number | null): VerifyItem[] {
+  const out: VerifyItem[] = [];
+  if (totalLiabilities !== null && d.total > totalLiabilities * 1.0005) out.push({ level: "verify", item: "이자부부채", message: `이자부부채 ${Math.round(d.total).toLocaleString("ko-KR")}가 부채총계 ${Math.round(totalLiabilities).toLocaleString("ko-KR")}보다 큼 — 행 착오` });
+  if (d.completeness === "partial") out.push({ level: "verify", item: "이자부부채", message: "포괄 금융부채 안의 차입금을 확인하지 못함 — 차입 일부가 빠졌을 수 있음" });
+  const noted = d.lines.filter(l => l.source === "주석");
+  if (noted.length) out.push({ level: "warn", item: "이자부부채", message: `주석에서 읽은 행: ${noted.map(l => `${l.name} ${Math.round(l.amount).toLocaleString("ko-KR")}`).join(", ")}` });
+  for (const c of d.checks) if (!/감사의견/.test(c)) out.push({ level: /찾지 못함/.test(c) ? "verify" : "warn", item: "이자부부채", message: c });
+  return out;
 }
