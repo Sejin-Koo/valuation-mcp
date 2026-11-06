@@ -281,8 +281,13 @@ export function financialsFromAuditXml(xml: string): AuditFin {
   const y0k = years[0];
   for (const [k, label] of [["revenue", "매출"], ["operatingIncome", "영업이익"], ["pretaxIncome", "법인세차감전이익"], ["netIncome", "당기순이익"], ["cash", "현금및현금성자산"], ["operatingCashFlow", "영업활동현금흐름"], ["depreciationAmortization", "감가상각비"]] as const)
     if (y0k[k] === null && (k !== "depreciationAmortization" || cf)) W(label, "해당 행을 찾지 못함 — 업종별 계정명이 다를 수 있음");
-  // 감가상각비: 주석·변동표에서 읽었거나 판정을 보류했으면 주의
-  for (const [k, v] of Object.entries(sources)) if (/상각/.test(k) && /주석|변동표/.test(v) && !/포함\(따로 더하지 않음\)/.test(v)) W(k, `현금흐름표가 아니라 ${v.replace(/ — .*/, "")}에서 읽음`);
+  // 감가상각비: 자산 변동표에서 추정했거나 사용권자산 상각을 판단으로 더했으면 주의.
+  // 현금흐름표·현금흐름 주석에서 그대로 읽은 값은 표시하지 않는다(2026-11-06 실측: 현금흐름 주석 출처 25곳 중 22곳이 XBRL 기준 1% 이내로
+  // 현금흐름표 본문 18곳 중 15곳과 같은 수준, 틀린 3곳은 모두 사용권자산 판단 차이. 변동표 추정은 6곳 중 2곳)
+  for (const [k, v] of Object.entries(sources)) {
+    if (!/상각/.test(k) || !/변동표/.test(v) || /포함\(따로 더하지 않음\)|판정 불가/.test(v)) continue;
+    W(k, /별도라 더함/.test(v) ? `사용권자산 상각을 감가상각비와 별도로 보고 더함(${v.replace(/ — .*/, "")}) — 판단이 들어간 값` : `현금흐름표·현금흐름 주석에 없어 ${v.replace(/ — .*/, "")}에서 추정`);
+  }
   for (const w of warnings) if (/사용권자산 상각 .*판정하지 못해/.test(w)) W("사용권자산상각비", w);
   for (const w of warnings) if (/변동표 값을 씀/.test(w)) W("감가상각비", w);
   if (rf.ppe && y0.depreciation !== null && sources["감가상각비"] && !/변동표/.test(sources["감가상각비"]) && (y0.depreciation > rf.ppe.v * 1.5 || y0.depreciation < rf.ppe.v * 0.5))
