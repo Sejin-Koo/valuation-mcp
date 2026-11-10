@@ -30,7 +30,40 @@ const waccShape = {
   debt_weight_pct: num().optional().describe("부채비중 D/(D+E)(%)"),
 };
 
-const peerRow = z.object({
+// valuation_get_data 응답을 그대로 옮긴 피어 행도 받는다(2026-11-10 — 객체 값이 숫자 칸으로 들어가 NaN으로 거절되던 문제).
+// 시가총액은 price × shares(없으면 total), 이자부부채는 total, 리스는 byCategory.lease, 실적은 financials.* 로 펼친다.
+// 이미 숫자인 칸은 건드리지 않는다.
+const FIN_KEYS = ["revenue", "operatingIncome", "netIncomeParent", "equityParent", "incomeMonths", "cash", "shortTermDeposits", "depreciationAmortization"] as const;
+export function flattenPeerRow(v: unknown): unknown {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+  const o: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+  const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+  const notes: string[] = [];
+  const mc = o.marketCap as Record<string, unknown> | undefined;
+  if (mc && typeof mc === "object") {
+    o.marketCap = isNum(mc.price) && isNum(mc.shares) ? mc.price * mc.shares : isNum(mc.total) ? mc.total : null;
+    if (typeof mc.sharesNote === "string" && mc.sharesNote) notes.push(mc.sharesNote);
+  }
+  const ibd = o.ibd as Record<string, unknown> | undefined;
+  if (ibd && typeof ibd === "object") {
+    const bc = ibd.byCategory as Record<string, unknown> | undefined;
+    if (o.lease === undefined && bc && isNum(bc.lease)) o.lease = bc.lease;
+    o.ibd = isNum(ibd.total) ? ibd.total : null;
+    if (ibd.completeness === "partial") notes.push("이자부부채 집계가 부분(partial)입니다");
+  }
+  const f = o.financials as Record<string, unknown> | undefined;
+  if (f && typeof f === "object") {
+    for (const k of FIN_KEYS) if (o[k] === undefined && isNum(f[k])) o[k] = f[k];
+    const rep = f.report as Record<string, unknown> | undefined;
+    if ((o.report === undefined || typeof o.report === "object") && rep && typeof rep.name === "string") o.report = rep.name;
+    delete o.financials;
+  }
+  if (o.report && typeof o.report === "object") { const n = (o.report as Record<string, unknown>).name; o.report = typeof n === "string" ? n : null; }
+  for (const k of ["nci", "enterpriseValue"]) { const x = o[k] as Record<string, unknown> | undefined; if (x && typeof x === "object") o[k] = isNum(x.total) ? x.total : null; }
+  if (notes.length) o.dataNotes = [...(Array.isArray(o.dataNotes) ? (o.dataNotes as unknown[]).map(String) : []), ...notes];
+  return o;
+}
+const peerRow = z.preprocess(flattenPeerRow, z.object({
     code: z.string(), name: z.string().optional(),
     beta: num().nullable().optional(), marketCap: num().nullable().optional(),
     ibd: num().nullable().optional(), lease: num().nullable().optional(),
@@ -41,7 +74,7 @@ const peerRow = z.object({
     netIncomeParent: num().nullable().optional(), equityParent: num().nullable().optional(),
     incomeMonths: num().nullable().optional(), report: z.string().nullable().optional(),
     dataNotes: jsonArray(z.string()).nullable().optional(),
-  });
+  }));
 const METRICS = ["ev_sales", "ev_ebit", "ev_ebitda", "per", "pbr", "unlevered_beta"] as const;
 const RatesSchema = z.object({
         valuation_date: yyyymmdd().describe("평가기준일"),
@@ -49,7 +82,7 @@ const RatesSchema = z.object({
       });
 const WaccSchema = z.object(waccShape);
 const PeerStatsSchema = z.object({
-        peers: jsonArray(peerRow).describe("피어 행 배열(valuation_get_data 응답 필드를 그대로 옮긴 값)"),
+        peers: jsonArray(peerRow).describe("피어 행 배열. 각 칸은 숫자(시가총액·이자부부채·실적 등). valuation_get_data 응답의 marketCap({price, shares})·ibd({total, byCategory.lease})·financials.* 를 그대로 넣어도 숫자로 펼친다 — 시가총액은 price × shares 이므로 price 를 평가기준일 KRX 종가로 고쳐 넣을 것"),
         metrics: jsonArray(z.enum(METRICS)).optional(),
         tax_rate_pct: num().optional().describe("언레버드 베타 계산용 법인세율(%)"),
         debt_definition: z.enum(["ibd_total", "ibd_ex_lease", "net_debt"]).optional(),
@@ -161,6 +194,7 @@ items 를 비우면 국고채 3·5·10년 + 회사채 AA-·BBB- 를 반환합니
 - 손익이 12개월 누적이 아닌 행(분기·반기보고서)은 흐름 멀티플에서 제외합니다(partial_period="annualize" 로 단순 연환산 가능 — 계절성 미반영).
 - EV/EBITDA 는 depreciationAmortization 이 있는 행만 계산됩니다.
 - 같은 종목코드가 중복되면 첫 행만 씁니다.
+- 피어 행의 칸은 숫자입니다. valuation_get_data 의 객체 값(marketCap·ibd·financials)을 그대로 넣으면 서버가 시가총액 = price × shares, ibd = total, 실적 = financials.* 로 펼칩니다.
 답변에는 표본 수와 통계량 이름(중앙값·사분위·구간)을 함께 적으십시오. 수치를 다시 손으로 계산하지 마십시오.`,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
