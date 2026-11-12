@@ -15,7 +15,7 @@
 | `dart_business_section` | 사업보고서 "II. 사업의 내용" 장 전체를 마크다운으로(표 포함), 하위 항목 선택·쪽 나눠 받기. 원본은 Vercel Blob 비공개 저장소(`valuation-doc-cache`)에 접수번호 단위로 24시간 보관(`lib/doc-cache.ts`, 끄려면 `DOC_CACHE_DISABLED=1`). 만료분은 `api/doc-cache-cleanup.ts`가 매일 03:10 KST에 지운다(Vercel Cron, `CRON_SECRET` 인증) | OpenDART 원본 |
 | `dart_ebitda_inputs` | 감가상각비(유형·사용권자산·무형·투자부동산)와 영업이익·매출·지배주주순이익을 연간 또는 최근 12개월(TTM)로. 결과의 `peerRow`를 `peer_statistics`에 넣으면 EV/EBITDA 계산. 감가상각 태그가 없는 소형사는 원문 주석 표 발췌 | OpenDART XBRL 원본·원문 |
 | `dart_interest_bearing_debt` | 이자부부채를 계정 행 단위로 뽑아 차입금·사채·전환사채·리스·기타 차입성 부채로 분류(외부 `valuation_get_data`의 `ibd`와 같은 규칙). 본문에 리스 행이 없거나 차입금이 '금융부채' 한 줄에 묶여 있으면 XBRL 주석으로 보충(본문 차입금에 리스가 이미 들어 있으면 더하지 않음). 상환전환우선주부채 등은 합계에서 빼고 따로. 정기보고서가 없는 비상장 외감법인은 감사보고서 원문 표(재무상태표·차입금·리스 주석)로 같은 규칙을 적용하고 감사의견을 알림 | OpenDART 재무상태표(fnlttSinglAcntAll)·XBRL 원본·감사보고서 원문(document.xml) |
-| `dart_audit_financials` | 감사보고서만 내는 비상장 외감법인의 감사보고서 원문 표에서 매출·영업이익·순이익·지배주주순이익, 감가상각비(유형·무형·사용권·투자부동산 — 현금흐름표 → 현금흐름 주석 → 자산 변동표), EBITDA, 영업활동현금흐름·유형/무형자산 취득, 현금·단기금융상품·매출채권·재고·매입채무·자산·부채·자본·지배기업 지분·비지배지분을 연도별(최대 3개 연도)로. 이자부부채·순차입금·감사의견도 함께 | 감사보고서 원문(document.xml) |
+| `dart_audit_financials` | 감사보고서만 내는 비상장 외감법인의 감사보고서 원문 표에서 매출·영업이익·순이익·지배주주순이익, 감가상각비(유형·무형·사용권·투자부동산 — 현금흐름표 → 현금흐름 주석 → 자산 변동표), EBITDA, 영업활동현금흐름·유형/무형자산 취득, 현금·단기금융상품·매출채권·재고·매입채무·자산·부채·자본·지배기업 지분·비지배지분을 연도별(최대 3개 연도)로. 이자부부채·순차입금·감사의견도 함께. `valuation_date`를 비우면 오늘(한국시간) 기준 최신 감사보고서(2026-11-12 — 기업분석 에이전트가 기준일 없이 불러 실패) | 감사보고서 원문(document.xml) |
 
 피어 모집단(`peergroup_get_population`)과 이자부부채가 포함된 분기말 밸류에이션 데이터(`valuation_get_data`)는 이 서버에 없습니다. 외부 서버 [kr-valuation-data](https://github.com/procpalee/DCF-Peergroup-Search)를 그대로 쓰고, 그 결과를 `peer_statistics` 에 넘기는 구성입니다. 이 서버의 일부 도구는 그 서버와 결과를 대조하는 용도로도 씁니다(아래 검증).
 
