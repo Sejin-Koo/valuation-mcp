@@ -6,7 +6,7 @@ import { renderVerification } from "./verify.js";
 
 const Schema = z.object({
   corp_code: z.string().regex(/^\d{8}$/).describe("DART 고유번호 8자리(dart_search_corp_code 로 확인)"),
-  valuation_date: yyyymmdd().describe("평가기준일 — 이 날까지 접수된 최신 감사보고서(연결 우선)를 쓴다"),
+  valuation_date: yyyymmdd().optional().describe("평가기준일 — 이 날까지 접수된 최신 감사보고서(연결 우선)를 쓴다. 비우면 오늘(한국시간) — 가치평가가 아니라 최신 감사보고서 실적만 볼 때"),
   years: z.number().int().min(2).max(3).optional().describe("연도 수. 3(기본)이면 그 전 해 감사보고서도 받아 3개 연도"),
 });
 
@@ -54,8 +54,11 @@ export function registerAuditTools(server: McpServer): void {
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, Schema, async (a: z.infer<typeof Schema>) => {
     try {
-      const r = await getAuditFinancials({ corp_code: a.corp_code, valuation_date: a.valuation_date, years: a.years });
-      return { ...text(`감사보고서 재무 요약 — 출처: DART 감사보고서 원문, 평가기준일 ${a.valuation_date}\n\n${render(r)}`), structuredContent: r as unknown as Record<string, unknown> };
+      // 기업분석처럼 평가기준일 없이 '최신 감사보고서'만 보려는 호출이 필수 인자 누락으로 실패했다(2026-11-12) → 비우면 오늘(한국시간)
+      const vd = a.valuation_date || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+      const r = await getAuditFinancials({ corp_code: a.corp_code, valuation_date: vd, years: a.years });
+      const head = a.valuation_date ? `평가기준일 ${vd}` : `기준일 ${vd}(지정하지 않아 오늘 — 가장 최근 접수된 감사보고서)`;
+      return { ...text(`감사보고서 재무 요약 — 출처: DART 감사보고서 원문, ${head}\n\n${render(r)}`), structuredContent: r as unknown as Record<string, unknown> };
     } catch (e) { return fail(e); }
   });
 }
