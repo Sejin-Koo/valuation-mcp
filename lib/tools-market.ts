@@ -4,7 +4,7 @@ import { z } from "zod";
 import { num, jsonArray, yyyymmdd, text, fail, defineTool } from "./common.js";
 import { computeBeta, BETA_PERIODS, type BetaPeriod } from "./beta.js";
 import { getMarketSnapshot } from "./naver.js";
-import { resolveCorp, findAnnualReport, downloadDocumentWithInfo, extractBusinessSection } from "./dart.js";
+import { resolveCorp, findAnnualReports, downloadDocumentWithInfo, extractBusinessSection, DartError } from "./dart.js";
 import { cacheLine } from "./doc-cache.js";
 
 const code6 = () => z.string().regex(/^[0-9A-Z]{6}$/, "종목코드 6자리");
@@ -92,14 +92,39 @@ export function registerMarketTools(server: McpServer): void {
   }, SectionSchema, async (a: z.infer<typeof SectionSchema>) => {
     try {
       let rcept = a.rcept_no, reportName = "(접수번호 직접 지정)", corpName: string | null = null, filed: string | null = null;
+      let got: { files: Awaited<ReturnType<typeof downloadDocumentWithInfo>>; sec: ReturnType<typeof extractBusinessSection> } | null = null;
+      let skipped = "";
       if (!rcept) {
         if (!a.year) throw new Error("year(결산연도) 또는 rcept_no 가 필요합니다.");
         const corp = resolveCorp({ stock_code: a.stock_code, corp_code: a.corp_code });
-        const rep = await findAnnualReport(corp.corp_code, a.year);
-        rcept = rep.rcept_no; reportName = rep.report_nm; corpName = rep.corp_name; filed = rep.rcept_dt;
+        // 최종본부터 차례로 연다. '[첨부정정]'처럼 첨부만 고친 공시는 본문에 사업의 내용이 없으므로(2026-11-16 실측: 팅크웨어 2025)
+        // 사업의 내용이 없으면 같은 연도의 이전 사업보고서(원본·기재정정)로 넘어간다 — 최대 3건
+        let cands = await findAnnualReports(corp.corp_code, a.year);
+        const tried = new Set<string>(), noSec: string[] = [];
+        for (let round = 0; round < 2 && !got; round++) {
+          for (const rep of cands) {
+            if (tried.has(rep.rcept_no) || tried.size >= 3) continue;
+            tried.add(rep.rcept_no);
+            const dl = await downloadDocumentWithInfo(rep.rcept_no);
+            try {
+              const sec = extractBusinessSection(dl.files);
+              got = { files: dl, sec }; rcept = rep.rcept_no; reportName = rep.report_nm; corpName = rep.corp_name; filed = rep.rcept_dt;
+              break;
+            } catch (e) {
+              if (!(e instanceof DartError && e.code === "NO_SECTION")) throw e;
+              noSec.push(`${rep.report_nm}(${rep.rcept_no})`);
+            }
+          }
+          if (!got && round === 0) cands = await findAnnualReports(corp.corp_code, a.year, true);
+        }
+        if (!got) throw new DartError(`${a.year} 결산 사업보고서에서 'II. 사업의 내용' 장을 찾지 못했습니다(확인한 공시: ${noSec.join(", ") || "없음"}).`, "NO_SECTION");
+        if (noSec.length) skipped = `참고: 최근 공시 ${noSec.join(", ")}에는 사업의 내용이 없어(첨부만 고친 정정 공시 등) 이 보고서에서 읽었습니다.`;
+      } else {
+        const dl = await downloadDocumentWithInfo(rcept);
+        got = { files: dl, sec: extractBusinessSection(dl.files) };
       }
-      const { files, cache, ms } = await downloadDocumentWithInfo(rcept);
-      const sec = extractBusinessSection(files);
+      const { cache, ms } = got.files;
+      const sec = got.sec;
       let subs = sec.subsections;
       if (a.subsections?.length) {
         const want = a.subsections;
@@ -115,13 +140,14 @@ export function registerMarketTools(server: McpServer): void {
         `${corpName ?? ""} ${reportName} (접수번호 ${rcept}${filed ? `, 접수일 ${filed}` : ""}) — II. 사업의 내용`,
         `추출: ${sec.method}, 전체 ${full.length.toLocaleString("ko-KR")}자${parts > 1 ? `, ${parts}쪽 중 ${part}쪽` : ""}`,
         cacheLine(cache, ms),
+        ...(skipped ? [skipped] : []),
         `하위 항목: ${sec.subsections.map(s => `${s.index}. ${s.title}(${s.chars.toLocaleString("ko-KR")}자)`).join(" / ")}`,
         "", "---", "",
       ];
       const tail = part < parts ? [``, `---`, `**잘림** — ${parts}쪽 중 ${part}쪽입니다. 이어서 받으려면 같은 인자에 part=${part + 1} 을 주십시오.`] : [];
       return {
         ...text(head.join("\n") + chunk + tail.join("\n")),
-        structuredContent: { rcept_no: rcept, report: reportName, corp_name: corpName, filed, method: sec.method, total_chars: full.length, part, parts, truncated: part < parts, subsections: sec.subsections.map(s => ({ index: s.index, title: s.title, chars: s.chars })) },
+        structuredContent: { rcept_no: rcept, report: reportName, ...(skipped ? { note: skipped } : {}), corp_name: corpName, filed, method: sec.method, total_chars: full.length, part, parts, truncated: part < parts, subsections: sec.subsections.map(s => ({ index: s.index, title: s.title, chars: s.chars })) },
       };
     } catch (e) { return fail(e); }
   });

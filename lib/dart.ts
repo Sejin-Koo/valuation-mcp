@@ -58,10 +58,11 @@ export function resolveCorp(input: { stock_code?: string; corp_code?: string }):
 
 export interface ReportRef { rcept_no: string; report_nm: string; rcept_dt: string; corp_name: string }
 
-/** 결산연도(year)의 사업보고서. 보고서명이 "(year.MM)"인 것 중 최종본(정정 반영). */
-export async function findAnnualReport(corp_code: string, year: string): Promise<ReportRef> {
+/** 결산연도(year)의 사업보고서 후보 — 보고서명이 "(year.MM)"인 것, 접수일 최근 순.
+ *  allVersions=false 면 최종본만(last_reprt_at=Y), true 면 원본·정정본 모두. */
+export async function findAnnualReports(corp_code: string, year: string, allVersions = false): Promise<ReportRef[]> {
   const y = Number(year);
-  const url = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${key()}&corp_code=${corp_code}&bgn_de=${y}0101&end_de=${y + 1}1231&pblntf_detail_ty=A001&last_reprt_at=Y&page_count=100`;
+  const url = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${key()}&corp_code=${corp_code}&bgn_de=${y}0101&end_de=${y + 1}1231&pblntf_detail_ty=A001&last_reprt_at=${allVersions ? "N" : "Y"}&page_count=100`;
   const res = await fetch(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new DartError(`DART 공시목록 HTTP ${res.status}`);
   const d: any = await res.json();
@@ -69,9 +70,13 @@ export async function findAnnualReport(corp_code: string, year: string): Promise
   if (d.status !== "000") throw new DartError(`DART 공시목록 오류 ${d.status}: ${String(d.message ?? "").slice(0, 100)}`, d.status);
   const hits = (d.list as any[]).filter(r => /사업보고서/.test(r.report_nm) && r.report_nm.includes(`(${year}.`));
   if (!hits.length) throw new DartError(`${year} 결산 사업보고서를 찾지 못했습니다(조회된 보고서: ${(d.list as any[]).map(r => r.report_nm).slice(0, 5).join(", ")}).`, "NO_REPORT");
-  hits.sort((a, b) => (a.rcept_dt < b.rcept_dt ? 1 : -1));
-  const h = hits[0];
-  return { rcept_no: h.rcept_no, report_nm: h.report_nm.trim(), rcept_dt: h.rcept_dt, corp_name: h.corp_name };
+  hits.sort((a, b) => (a.rcept_dt < b.rcept_dt ? 1 : a.rcept_dt > b.rcept_dt ? -1 : (a.rcept_no < b.rcept_no ? 1 : -1)));
+  return hits.map(h => ({ rcept_no: h.rcept_no, report_nm: String(h.report_nm).trim(), rcept_dt: h.rcept_dt, corp_name: h.corp_name }));
+}
+
+/** 결산연도(year)의 사업보고서. 보고서명이 "(year.MM)"인 것 중 최종본(정정 반영). */
+export async function findAnnualReport(corp_code: string, year: string): Promise<ReportRef> {
+  return (await findAnnualReports(corp_code, year))[0];
 }
 
 // ─── 원본 내려받기 (dart-mcp 에서 옮김) ───────────────────
