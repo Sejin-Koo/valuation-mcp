@@ -39,5 +39,10 @@ let threw = false; try { stubFromDates("20261231", 2026); } catch { threw = true
 ok("평가일이 첫해 말 이후면 오류", threw);
 let threw2 = false; try { calculateDcf({ fcf: [1, 2], wacc_pct: 9, terminal_growth_pct: 1, stub_fraction: 1.5 }); } catch { threw2 = true; }
 ok("stub 범위 오류", threw2);
+// 하이픈 날짜도 같은 결과(실측 2026-11-19: '2026-09-30' + first_year 2026 이 stub 오류)
+{
+  const x = stubFromDates("2026-09-30", 2026), y = stubFromDates("20260930", 2026);
+  ok("하이픈 날짜 stub", x.fraction !== undefined && x.fraction === y.fraction && x.fraction > 0.24 && x.fraction < 0.26, String(x.fraction));
+}
 console.log(`pass=${pass} fail=${fail}`);
 if (fail) process.exit(1);
