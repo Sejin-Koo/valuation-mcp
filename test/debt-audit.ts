@@ -1,7 +1,7 @@
 // 감사보고서 원문 표 읽기 단위 시험(외부 호출 없음). 사례는 2026-11-05 비상장 외감법인 감사보고서 표본에서 찾은 표 모양.
 import assert from "node:assert/strict";
 import { extractBalanceSheet, cleanName, parseAmount } from "../lib/audit-bs.js";
-import { debtFromAuditXml, auditOpinion } from "../lib/debt-audit.js";
+import { debtFromAuditXml, auditOpinion, catchAllBreakdown, noteTables } from "../lib/debt-audit.js";
 
 let n = 0; const ok = (m: string) => { n++; console.log("  OK", m); };
 const tr = (...cells: string[]) => `<TR>${cells.map(c => `<TD>${c}</TD>`).join("")}</TR>`;
@@ -91,6 +91,21 @@ const twoYears = doc("재무상태표", "천원",
 const f = debtFromAuditXml(twoYears);
 assert.equal(f.total, 8000);
 ok("전기 표 건너뜀·비유동성리스부채");
+
+// 7-1. 정기보고서: 본문 포괄 금융부채와 합계가 같은 내역 표에서 차입·사채 행(차감계정 음수, 리스·파생·보증 제외). 전기 표는 금액이 달라 안 맞음
+// (실측 2026-11-19: GS건설 2026 반기 — 유동성장기차입금·유동성사채가 회사 고유 XBRL 태그라 표준 태그로는 비유동 전부·유동 일부가 빠졌다)
+const gsNotes = `<P>단기금융부채 내역에 대한 세부 정보 당반기말 (단위 : 백만원)</P><TABLE><THEAD><TR><TD></TD><TD>공시금액</TD></TR></THEAD><TBODY>` +
+  tr("단기차입금", "1,200") + tr("유동성장기차입금", "2,058") + tr("유동성장기차입금현재가치할인차금", "(4)") + tr("유동성사채", "145") + tr("유동리스부채", "75") + tr("유동파생상품부채", "33") + tr("유동금융보증부채", "18") + tr("합계", "3,525") + `</TBODY></TABLE>` +
+  `<P>전기말 (단위 : 백만원)</P><TABLE><THEAD><TR><TD></TD><TD>공시금액</TD></TR></THEAD><TBODY>` + tr("단기차입금", "991") + tr("합계", "991") + `</TBODY></TABLE>` +
+  `<P>장기금융부채 내역에 대한 세부 정보 당반기말 (단위 : 백만원)</P><TABLE><THEAD><TR><TD></TD><TD>공시금액</TD></TR></THEAD><TBODY>` +
+  tr("장기차입금", "2,338") + tr("장기차입금현재가치할인차금", "(3)") + tr("사채", "427") + tr("사채할인발행차금", "(1)") + tr("비유동리스부채", "276") + tr("기타금융부채", "63") + tr("장기임대보증금", "22") + tr("합계", "3,122") + `</TBODY></TABLE>`;
+const gb = catchAllBreakdown(noteTables(gsNotes, 0), [{ section: "current", name: "단기금융부채", amount: 3525e6 }, { section: "nonCurrent", name: "장기금융부채", amount: 3122e6 }, { section: "nonCurrent", name: "기타비유동금융부채", amount: 999e6 }]);
+assert.equal(gb.matched.length, 2);
+assert.equal(gb.lines.filter(l => l.section === "current").reduce((a, l) => a + l.amount, 0), (1200 + 2058 - 4 + 145) * 1e6);
+assert.equal(gb.lines.filter(l => l.section === "nonCurrent").reduce((a, l) => a + l.amount, 0), (2338 - 3 + 427 - 1) * 1e6);
+assert.equal(gb.lines.find(l => l.name.startsWith("사채할인"))!.category, "bonds");
+assert.ok(!gb.lines.some(l => l.category === "lease"));
+ok("포괄 금융부채 내역 표(합계 일치)에서 차입·사채 행");
 
 // 8. 감사의견
 assert.equal(auditOpinion("<P>의견거절근거 우리는 ...</P>"), "의견거절");
