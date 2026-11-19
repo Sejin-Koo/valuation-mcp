@@ -89,7 +89,9 @@ const CONTRA = /할인발행차금|전환권조정|신주인수권조정|교환�
 
 type Cls = DebtCategory | "debtLike" | null;
 export function classify(nm: string, aid: string): Cls {
-  const n = nm.replace(/\s/g, "");
+  // '초과청구공사채무'·'관계회사채무'처럼 '…공사/회사 + 채무'가 붙은 이름은 '사채'로 읽지 않는다
+  // (실측 2026-11-19: 현대엔지니어링 초과청구공사채무 9,609.9억이 사채로 분류됨 — 계약부채라 이자부부채 아님)
+  const n = nm.replace(/\s/g, "").replace(/([공회])사채무/g, "$1_채무");
   if (/상환우선주|전환우선주/.test(n)) return "debtLike";
   if (EXCL.test(n) && !/차입|사채/.test(n)) return null;
   if (/리스(유동|비유동|장기|단기)?부채/.test(n) || aid.includes("LeaseLiabilities")) return "lease";
