@@ -110,7 +110,9 @@ const DcfSchema = z.object({
 export function stubFromDates(vd?: string, firstYear?: number, fye?: string, given?: number): { fraction?: number; note?: string } {
   if (given !== undefined && given !== null) return {};
   if (!vd) return {};
-  const mmdd = fye || "1231";
+  // 스키마는 YYYY-MM-DD도 받으므로 자르기 전에 하이픈을 뺀다(실측 2026-11-19: '2026-09-30'이면 stub_fraction 오류)
+  vd = vd.replace(/-/g, "");
+  const mmdd = (fye || "1231").replace(/-/g, "");
   const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d);
   const v = day(+vd.slice(0, 4), +vd.slice(4, 6), +vd.slice(6, 8));
   const fyEnd = (y: number) => day(y, +mmdd.slice(0, 2), +mmdd.slice(2, 4));
