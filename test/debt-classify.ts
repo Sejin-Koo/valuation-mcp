@@ -15,6 +15,10 @@ assert.equal(classify("자산유동화차입금", "x"), "otherDebt");
 assert.equal(classify("유동성전환상환우선주부채", "dart_CurrentPortionOfConvertibleRedeemablePreferredStockLiabilities"), "debtLike");
 assert.equal(classify("금융리스채권", "ifrs-full_CurrentFinanceLeaseReceivables"), null);
 assert.equal(classify("유동성파생상품부채", "dart_CurrentDerivativeLiabilities"), null);
+assert.equal(classify("초과청구공사채무", "-표준계정코드 미사용-"), null);
+assert.equal(classify("관계회사채무", "-표준계정코드 미사용-"), null);
+assert.equal(classify("회사채", "-표준계정코드 미사용-"), "bonds");
+assert.equal(classify("유동성회사채", "-표준계정코드 미사용-"), "bonds");
 ok("계정 분류");
 
 // 2. 구역·차감계정·부모 합계 행(스팩: 차입부채 = 전환사채 + 전환권조정, 유동/비유동 구분 없음)
