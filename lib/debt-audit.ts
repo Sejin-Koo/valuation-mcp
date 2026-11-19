@@ -251,6 +251,48 @@ function matchCatchAll(tables: NoteTable[], catchAll: { section: Section; name: 
   return out;
 }
 
+/** 포괄 금융부채 행(본문)의 금액과 '합계'가 같은 주석 내역 표에서 차입금·사채 행을 읽는다(차감계정은 음수, 리스는 뺌).
+ * 정기보고서 원문용 — XBRL 주석 태그가 회사 고유 태그라 표준 태그로 못 읽을 때 쓴다
+ * (실측 2026-11-19: GS건설 2026 반기 '단기금융부채'·'장기금융부채' 내역 표 — 유동성장기차입금·유동성사채가 회사 고유 태그였다).
+ * 합계가 본문 금액과 같은 표만 쓰므로, 맞은 구역은 그 표에 차입 행이 없으면 '차입 없음'으로 확정된다. */
+export function catchAllBreakdown(tables: NoteTable[], catchAll: { section: Section; name: string; amount: number }[]): { lines: DebtLine[]; matched: { section: Section; name: string; amount: number }[] } {
+  const lines: DebtLine[] = []; const matched: { section: Section; name: string; amount: number }[] = [];
+  for (const c of catchAll) {
+    for (const t of tables) {
+      const u = t.unit;
+      if (!u || !Number.isFinite(u) || priorYearTable(t)) continue;
+      const tol = Math.max(u, Math.abs(c.amount) * 0.0005);
+      const body = t.rows.slice(t.headRows);
+      const totalRow = body.find(r => {
+        const l = labels(r).find(x => /^(합계|계|총계)$/.test(norm(x.label)));
+        if (!l) return false;
+        const v = firstValue(t, r, l.idx + 1);
+        return v !== null && Math.abs(v * u - c.amount) <= tol;
+      });
+      if (!totalRow) continue;
+      const got: DebtLine[] = [];
+      for (const r of body) {
+        if (r === totalRow) continue;
+        const l = labels(r)[0];
+        if (!l) continue;
+        const n = norm(l.label);
+        let v = firstValue(t, r, l.idx + 1);
+        if (!v) continue;
+        v *= u;
+        let cat: DebtCategory | null;
+        if (CONTRA_ROW.test(n)) { cat = /사채/.test(n) ? "bonds" : (got[got.length - 1]?.category ?? "borrowings"); if (v > 0) v = -v; }
+        else { const k = classify(l.label, ""); cat = k && k !== "debtLike" && k !== "lease" ? k : null; }
+        if (!cat) continue;
+        got.push({ section: c.section, name: `${l.label}(주석)`, amount: v, category: cat, source: "주석", tag: "원문 표" });
+      }
+      lines.push(...got); matched.push(c);
+      break;
+    }
+  }
+  return { lines, matched };
+}
+const CONTRA_ROW = /현재가치할인차금|할인발행차금|사채상환할증금$/;
+
 /** 감사의견: 감사보고서 앞부분의 의견 단락 제목으로 판정 */
 export function auditOpinion(xml: string): "적정" | "한정" | "부적정" | "의견거절" | null {
   const t = plain(xml.slice(0, 60_000)).replace(/\s/g, "");

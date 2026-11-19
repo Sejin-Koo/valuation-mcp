@@ -15,7 +15,8 @@
  * 3. 정기보고서가 없는 비상장 외감법인은 감사보고서 원문 표로 같은 규칙을 적용한다(debt-audit.ts).
  */
 import { DartError, resolveCorp } from "./dart.js";
-import { debtFromAuditReport } from "./debt-audit.js";
+import { debtFromAuditReport, catchAllBreakdown, noteTables } from "./debt-audit.js";
+import { downloadDocument } from "./dart.js";
 import { summarize, type Verification, type VerifyItem } from "./verify.js";
 import { periodicReportsUntil, reprtCode, downloadXbrl, type PeriodicReport, type XbrlDoc } from "./xbrl.js";
 
@@ -182,6 +183,12 @@ export function instantFacts(doc: XbrlDoc | string, instant: string, scope: "C" 
   return out;
 }
 
+/** 구역별 차입 흔적 태그(구역 점검용 — 값을 넣는 데는 쓰지 않는다) */
+const EVIDENCE = {
+  current: ["ShorttermBorrowings", "ShortTermLoans", "CurrentPortionOfLongtermBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings", "CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived", "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued"],
+  nonCurrent: ["LongtermBorrowings", "LongTermBorrowingsGross", "LongTermLoansGross", "NoncurrentPortionOfNoncurrentLoansReceived", "NoncurrentPortionOfNoncurrentBondsIssued", "NoncurrentPortionOfNoncurrentBorrowings"],
+};
+
 // ─── 조립 ────────────────────────────────────────────────
 
 const isoEnd = (yyyymm: string) => new Date(Date.UTC(Number(yyyymm.slice(0, 4)), Number(yyyymm.slice(4)), 0)).toISOString().slice(0, 10);
@@ -220,8 +227,17 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
   if (needLease || needBorrow) {
     const scope = bs.fs === "CFS" ? "C" : "S";
     let nf: Map<string, number> | null = null;
+    // 포괄 금융부채 안의 차입은 원문 주석 내역 표(합계 = 본문 금액)를 먼저 본다 — XBRL 표준 태그로는 회사 고유 태그를 못 읽는다(GS건설 2026 반기)
+    const docP = needBorrow ? downloadDocument(target.rcept_no).then(f => f[0]?.xml ?? null, () => null) : Promise.resolve(null);
     try { nf = instantFacts(await downloadXbrl(target.rcept_no, rc, input.deadline), isoEnd(target.periodEnd), scope); }
     catch (e) { checks.push(`주석(XBRL)을 받지 못해 보충하지 못함 — ${(e as Error).message}`); }
+    const docXml = await docP;
+    const brk = docXml ? catchAllBreakdown(noteTables(docXml, 0), p.catchAll) : { lines: [], matched: [] };
+    const docSecs = new Set(brk.matched.map(m => m.section));
+    if (brk.matched.length) {
+      lines.push(...brk.lines);
+      notes.push(`본문 '${brk.matched.map(m => m.name).join("·")}' 안의 차입금·사채를 합계가 같은 원문 주석 내역 표로 산정`);
+    }
     if (nf) {
       // 본문 차입금 행에 리스가 이미 들어 있는지: 본문 차입 합 = 주석 차입·사채 태그 합 + 리스 태그 이면 포함(실측: LG화학 2025 '차입금' 행 = 차입금·사채 + 리스)
       const inside = (sec: Section, lease: number | undefined, borrowAlts: string[][], bondAlts: string[][]) => {
@@ -269,12 +285,12 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
           ["nonCurrent", "borrowings", [["LongtermBorrowings"], ["NoncurrentPortionOfNoncurrentLoansReceived"]]],
           ["nonCurrent", "bonds", [["NoncurrentPortionOfNoncurrentBondsIssued"]]],
         ];
-        let found = 0;
-        for (const [section, category, alts] of groups) for (const [tag, v] of pick(alts)) {
+        let found = brk.matched.length ? 1 : 0; // 원문 표로 확정한 구역이 있으면(차입 행이 없어도) 미확인이 아니다
+        for (const [section, category, alts] of groups) if (!docSecs.has(section)) for (const [tag, v] of pick(alts)) {
           lines.push({ section, name: `${CAT_LABEL[category]}(주석)`, amount: v, category, source: "주석", tag: `ifrs-full:${tag}` }); found += v;
         }
         const totalNote = nf.get("Borrowings") ?? (((nf.get("LoansReceived") ?? 0) + (nf.get("BondsIssued") ?? 0)) || undefined);
-        if (totalNote && totalNote - found > 1) {
+        if (!docSecs.size && totalNote && totalNote - found > 1) {
           lines.push({ section: "unclassified", name: "차입금·사채(주석 총계 잔액, 구역 미상)", amount: totalNote - found, category: "borrowingsAndBonds", source: "주석", tag: "ifrs-full:Borrowings 또는 LoansReceived+BondsIssued" });
           checks.push(`주석 차입금 총계 ${eok(totalNote)} 중 유동·비유동 태그가 없는 ${eok(totalNote - found)}를 '구역 미상'으로 넣음 — 원문 확인 권장`);
           found = totalNote;
@@ -283,6 +299,16 @@ export async function getInterestBearingDebt(input: { stock_code?: string; corp_
         if (!found) {
           completeness = "partial"; reason = "포괄 금융부채 안의 차입금 미확인";
           checks.push(`주석에서도 차입금·사채 금액을 찾지 못함 — 포괄 금융부채(${p.catchAll.map(c => `${c.name} ${eok(c.amount)}`).join(", ")})에 차입이 없거나 비표준 태그`);
+        } else {
+          // 구역별 점검: 원문 내역 표로 확정하지 못한 포괄 금융부채 구역에 차입 행이 하나도 없으면 일부 미확인(실측: GS건설 2026 반기 — 비유동 2.76조 누락이 '주의'로만 표시됨)
+          // 그 구역 차입의 흔적(표준·dart 태그 값)이 주석에 있는데 그 구역에 넣지 못했을 때만 — 보증금 등만 담긴 포괄 행을 미확인으로 올리지 않게
+          // (실측 2026-11-19 표본 27곳: KEC 비유동금융부채 42억·일동홀딩스는 흔적 태그 없음 → 표시 안 함)
+          const evid = (sec: Section) => EVIDENCE[sec as "current" | "nonCurrent"].map(t => [t, nf!.get(t) ?? 0] as [string, number]).filter(([, v]) => v > 0);
+          const miss = p.catchAll.filter(c => (c.section === "current" || c.section === "nonCurrent") && !docSecs.has(c.section) && !lines.some(l => l.section === c.section && l.category !== "lease") && evid(c.section).length);
+          if (miss.length) {
+            completeness = "partial"; reason = `${miss.map(c => (c.section === "current" ? "유동" : "비유동")).join("·")} 포괄 금융부채 안의 차입금 미확인`;
+            for (const c of miss) checks.push(`${c.name} ${eok(c.amount)} 안의 차입금·사채를 넣지 못함 — 주석에 ${evid(c.section).map(([t, v]) => `${t} ${eok(v)}`).join(", ")}가 있음. 원문 확인`);
+          }
         }
       }
     } else if (needBorrow) { completeness = "partial"; reason = "주석을 받지 못해 포괄 금융부채 안의 차입금 미확인"; }
