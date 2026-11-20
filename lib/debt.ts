@@ -19,6 +19,7 @@ import { debtFromAuditReport, catchAllBreakdown, noteTables } from "./debt-audit
 import { downloadDocument } from "./dart.js";
 import { summarize, type Verification, type VerifyItem } from "./verify.js";
 import { periodicReportsUntil, reprtCode, downloadXbrl, type PeriodicReport, type XbrlDoc } from "./xbrl.js";
+import { fetchRetry } from "./http.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 function key(): string {
@@ -58,7 +59,7 @@ async function fetchBs(corp_code: string, years: string[], reprt_code: string): 
   for (const fs of ["CFS", "OFS"] as const) {
     for (const y of years) {
       const url = `https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?crtfc_key=${key()}&corp_code=${corp_code}&bsns_year=${y}&reprt_code=${reprt_code}&fs_div=${fs}`;
-      const res = await fetch(url, { headers: { "User-Agent": UA } });
+      const res = await fetchRetry(url, { headers: { "User-Agent": UA } });
       if (!res.ok) throw new DartError(`DART 재무제표 HTTP ${res.status}`);
       const d: any = await res.json();
       if (d.status === "013") continue;

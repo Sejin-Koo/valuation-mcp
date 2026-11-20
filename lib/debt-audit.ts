@@ -9,6 +9,7 @@
 import { DartError, downloadDocument } from "./dart.js";
 import { parseBs, classify, type DebtResult, type DebtLine, type DebtLike, type Section, type DebtCategory } from "./debt.js";
 import { extractBalanceSheet, extractStatement, tableGrid, cleanName, parseAmount } from "./audit-bs.js";
+import { fetchRetry } from "./http.js";
 
 export interface AuditDebt {
   total: number; lines: DebtLine[]; debtLike: DebtLike[]; notes: string[]; checks: string[];
@@ -365,7 +366,7 @@ export async function auditReportsUntil(corp_code: string, until: string): Promi
   const y = Number(until.slice(0, 4));
   const out: AuditReport[] = [];
   for (let page = 1; page <= 2; page++) {
-    const res = await fetch(`https://opendart.fss.or.kr/api/list.json?crtfc_key=${k}&corp_code=${corp_code}&bgn_de=${y - 2}0101&end_de=${until}&pblntf_ty=F&page_no=${page}&page_count=100`, { headers: { "User-Agent": UA } });
+    const res = await fetchRetry(`https://opendart.fss.or.kr/api/list.json?crtfc_key=${k}&corp_code=${corp_code}&bgn_de=${y - 2}0101&end_de=${until}&pblntf_ty=F&page_no=${page}&page_count=100`, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new DartError(`DART 공시목록 HTTP ${res.status}`);
     const d: any = await res.json();
     if (d.status === "013") break;
