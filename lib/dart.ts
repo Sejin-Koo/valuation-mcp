@@ -15,6 +15,7 @@
 import { getZipWithCache, type CacheInfo } from "./doc-cache.js";
 import AdmZip from "adm-zip";
 import { readFileSync } from "node:fs";
+import { fetchRetry } from "./http.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 
@@ -63,7 +64,7 @@ export interface ReportRef { rcept_no: string; report_nm: string; rcept_dt: stri
 export async function findAnnualReports(corp_code: string, year: string, allVersions = false): Promise<ReportRef[]> {
   const y = Number(year);
   const url = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${key()}&corp_code=${corp_code}&bgn_de=${y}0101&end_de=${y + 1}1231&pblntf_detail_ty=A001&last_reprt_at=${allVersions ? "N" : "Y"}&page_count=100`;
-  const res = await fetch(url, { headers: { "User-Agent": UA } });
+  const res = await fetchRetry(url, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new DartError(`DART 공시목록 HTTP ${res.status}`);
   const d: any = await res.json();
   if (d.status === "013") throw new DartError(`${year} 결산 사업보고서가 DART 에 없습니다(아직 제출 전이거나 사업보고서 제출 대상이 아님).`, "NO_REPORT");
@@ -103,7 +104,7 @@ async function downloadZip(rcept_no: string): Promise<Buffer> {
   const timer = setTimeout(() => ac.abort(), DOWNLOAD_TIMEOUT_MS);
   let buf: Buffer;
   try {
-    const res = await fetch(`https://opendart.fss.or.kr/api/document.xml?crtfc_key=${key()}&rcept_no=${rcept_no}`, { headers: { "User-Agent": UA }, signal: ac.signal });
+    const res = await fetchRetry(`https://opendart.fss.or.kr/api/document.xml?crtfc_key=${key()}&rcept_no=${rcept_no}`, { headers: { "User-Agent": UA }, signal: ac.signal }, { quickMs: 10_000 });
     if (!res.ok) throw new DartError(`DART 원본 HTTP ${res.status}`);
     buf = Buffer.from(await res.arrayBuffer());
   } catch (e) {

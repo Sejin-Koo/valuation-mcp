@@ -15,6 +15,7 @@
  */
 import AdmZip from "adm-zip";
 import { DartError } from "./dart.js";
+import { fetchRetry } from "./http.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 const OK_DIMS = new Set(["ConsolidatedMember", "SeparateMember", "ReportedAmountMember"]);
@@ -41,7 +42,7 @@ export async function periodicReportsUntil(corp_code: string, until: string): Pr
   const out: PeriodicReport[] = [];
   for (let page = 1; page <= 3; page++) {
     const url = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${key()}&corp_code=${corp_code}&bgn_de=${y - 3}0101&end_de=${until}&pblntf_ty=A&last_reprt_at=N&page_no=${page}&page_count=100`;
-    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    const res = await fetchRetry(url, { headers: { "User-Agent": UA } });
     if (!res.ok) throw new DartError(`DART 공시목록 HTTP ${res.status}`);
     const d: any = await res.json();
     if (d.status === "013") break;
@@ -84,7 +85,7 @@ export async function downloadXbrl(rcept_no: string, reprt_code: string, deadlin
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), budget);
     try {
-      const res = await fetch(`https://opendart.fss.or.kr/api/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcept_no}&reprt_code=${reprt_code}`, { headers: { "User-Agent": UA }, signal: ac.signal });
+      const res = await fetchRetry(`https://opendart.fss.or.kr/api/fnlttXbrl.xml?crtfc_key=${key()}&rcept_no=${rcept_no}&reprt_code=${reprt_code}`, { headers: { "User-Agent": UA }, signal: ac.signal }, { quickMs: 10_000 });
       if (!res.ok) throw new DartError(`DART XBRL HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length < 100 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
